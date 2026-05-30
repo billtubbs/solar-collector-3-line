@@ -37,12 +37,8 @@ dev = [
     "ruff",
 ]
 
-[project.urls]
-Homepage = "https://example.org/solar-collector-3-line"
-Repository = "https://example.org/solar-collector-3-line.git"
-
 [tool.ruff]
 line-length = 79
 
-[tool.setuptools]
-packages = { find = {} }
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -24,6 +24,7 @@ pytest
 
 Development
 - Put source under `src/` and create modules for the simulator and Gymnasium environment.
+- See `docs/simulation_step_graph.md` for the step-by-step simulation computation graph.
 
 License: MIT
 Author: Russ Rhinehart / Research Team

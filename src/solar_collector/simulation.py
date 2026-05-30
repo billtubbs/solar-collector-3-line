@@ -1,14 +1,133 @@
+import copy
 import numpy as np
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .model import (
     flow_rate_from_valve,
+    hinside,
     pump_head_and_dP,
     pump_speed_update,
+    rho,
     thermal_line_step,
     valve_state_update,
 )
+
+
+def process_step(
+    state: "SimulationState",
+    config: "SimulationConfig",
+    dt: float,
+) -> "SimulationState":
+    new_state = copy.deepcopy(state)
+    exp = config.exp
+    sqrt = config.sqrt
+    rho_func = config.rho_func
+    hinside_func = config.hinside_func
+    pi = config.pi
+
+    new_state.spumps = pump_speed_update(
+        new_state.spumpstarg,
+        new_state.spumps,
+        dt,
+        config.pumptau,
+        exp=exp,
+    )
+    new_state.valvex = valve_state_update(
+        new_state.valvextarg,
+        new_state.valvex,
+        dt,
+        config.valvetau,
+        exp=exp,
+    )
+
+    F_total = state.Ftotal
+    _, dPpump = pump_head_and_dP(
+        F_total,
+        new_state.spumps,
+        config.dens,
+        sqrt=sqrt,
+    )
+
+    for line in range(3):
+        new_state.F[line] = flow_rate_from_valve(
+            new_state.valvex[line],
+            config.Cv,
+            dPpump,
+            config.G,
+            new_state.flowaest[line],
+            config.Flowb,
+            sqrt=sqrt,
+        )
+        new_state.Mdot[line] = config.dens * new_state.F[line]
+
+    new_state.Ftotal = float(np.sum(new_state.F))
+    new_state.Mdottotal = float(np.sum(new_state.Mdot))
+
+    for line in range(3):
+        Ta_line, PipeT_line = thermal_line_step(
+            state.Tb[line],
+            config.initial_Tin,
+            new_state.Mdot[line],
+            config.R,
+            config.dz,
+            dt,
+            new_state.Irad1,
+            config.MirrorWidth,
+            new_state.eff1[line],
+            config.hamb,
+            config.Tamb,
+            state.PipeT[line],
+            config.Dispersion,
+            method="B" if config.use_backward_diff else "F",
+            rho_func=rho_func,
+            hinside_func=hinside_func,
+            exp=exp,
+            pi=pi,
+        )
+        new_state.Ta[line] = Ta_line
+        new_state.PipeT[line] = PipeT_line
+        new_state.Tb[line] = Ta_line
+
+    return new_state
+
+
+def measure_step(
+    state: "SimulationState",
+    config: "SimulationConfig",
+    dt: float,
+    rng: np.random.Generator,
+) -> "SimulationState":
+    new_state = copy.deepcopy(state)
+    measured_noise = rng.normal(scale=config.noise_std, size=3)
+    new_state.Fmeas = 0.95 * new_state.F * (1.0 + measured_noise)
+    new_state.T2meas = np.array([new_state.Ta[line, -1] for line in range(3)])
+    new_state.T1meas = np.array([new_state.Ta[line, -1] for line in range(3)])
+    new_state.Fmeasfilt = 0.9 * new_state.Fmeas + 0.1 * new_state.Fmeasfilt
+    return new_state
+
+
+def control_step(
+    state: "SimulationState", config: "SimulationConfig", dt: float
+) -> "SimulationState":
+    return copy.deepcopy(state)
+
+
+def evaluate_step(
+    state: "SimulationState", config: "SimulationConfig"
+) -> "SimulationState":
+    return copy.deepcopy(state)
+
+
+def record_history(state: "SimulationState") -> "SimulationState":
+    new_state = copy.deepcopy(state)
+    new_state.history["simtime"].append(new_state.simtime)
+    new_state.history["T1"].append(float(np.mean(new_state.Ta[:, -1])))
+    new_state.history["T2"].append(float(np.mean(new_state.Ta[:, -1])))
+    new_state.history["F_total"].append(float(new_state.Ftotal))
+    new_state.history["pump_speed"].append(float(new_state.spumps))
+    return new_state
+
 
 
 @dataclass
@@ -29,12 +148,21 @@ class SimulationConfig:
     Flowa: float = 5_000_000.0
     Flowb: float = 0.5 * (4.0 / 9.0) * 5_000_000.0
     G: float = field(init=False)
+    Irad: float = 0.95
+    Irad1: float = 0.95
+    eff: float = 0.8
     initial_Tin: float = 280.0
     initial_T1SP: float = 360.0
     initial_spump: float = 0.8
     noise_std: float = 0.05
     use_backward_diff: bool = True
     dt: float = 0.1
+    exp: Callable[[Any], Any] = np.exp
+    sqrt: Callable[[Any], Any] = np.sqrt
+    log: Callable[[Any], Any] = np.log
+    pi: float = np.pi
+    rho_func: Callable[[Any], Any] = rho
+    hinside_func: Callable[..., Any] = hinside
 
     def __post_init__(self):
         self.G = self.dens / 1000.0
@@ -142,84 +270,11 @@ class SolarCollectorSimulator:
     def step(self, dt: Optional[float] = None):
         dt = dt if dt is not None else self.config.dt
         self.state.simtime += dt
-        self._process_step(dt)
-        self._measure_step(dt)
-        self._control_step(dt)
-        self._evaluate_step()
-        self._record_history()
-
-    def _process_step(self, dt: float):
-        config = self.config
-        state = self.state
-
-        state.spumps = pump_speed_update(
-            state.spumpstarg, state.spumps, dt, config.pumptau
-        )
-        state.valvex = valve_state_update(
-            state.valvextarg, state.valvex, dt, config.valvetau
-        )
-
-        F_total = state.Ftotal
-        Fmax, dPpump = pump_head_and_dP(F_total, state.spumps, config.dens)
-
-        for line in range(3):
-            state.F[line] = flow_rate_from_valve(
-                state.valvex[line],
-                config.Cv,
-                dPpump,
-                config.G,
-                state.flowaest[line],
-                config.Flowb,
-            )
-            state.Mdot[line] = config.dens * state.F[line]
-
-        state.Ftotal = float(np.sum(state.F))
-        state.Mdottotal = float(np.sum(state.Mdot))
-
-        for line in range(3):
-            Ta_line, PipeT_line = thermal_line_step(
-                state.Tb[line],
-                config.initial_Tin,
-                state.Mdot[line],
-                config.R,
-                config.dz,
-                dt,
-                state.Irad1,
-                config.MirrorWidth,
-                state.eff1[line],
-                config.hamb,
-                config.Tamb,
-                state.PipeT[line],
-                config.Dispersion,
-                method="B" if config.use_backward_diff else "F",
-            )
-            state.Ta[line] = Ta_line
-            state.PipeT[line] = PipeT_line
-            state.Tb[line] = Ta_line
-
-    def _measure_step(self, dt: float):
-        state = self.state
-        measured_noise = self.rng.normal(scale=self.config.noise_std, size=3)
-        state.Fmeas = 0.95 * state.F * (1.0 + measured_noise)
-        state.T2meas = np.array([state.Ta[line, -1] for line in range(3)])
-        state.T1meas = np.array([state.Ta[line, -1] for line in range(3)])
-        state.Fmeasfilt = 0.9 * state.Fmeas + 0.1 * state.Fmeasfilt
-
-    def _control_step(self, dt: float):
-        # Placeholder for control logic: T1, T2, flow, and pump control.
-        pass
-
-    def _evaluate_step(self):
-        # Placeholder for evaluation metrics and output state.
-        pass
-
-    def _record_history(self):
-        state = self.state
-        self.state.history["simtime"].append(state.simtime)
-        self.state.history["T1"].append(float(np.mean(state.Ta[:, -1])))
-        self.state.history["T2"].append(float(np.mean(state.Ta[:, -1])))
-        self.state.history["F_total"].append(float(state.Ftotal))
-        self.state.history["pump_speed"].append(float(state.spumps))
+        self.state = process_step(self.state, self.config, dt)
+        self.state = measure_step(self.state, self.config, dt, self.rng)
+        self.state = control_step(self.state, self.config, dt)
+        self.state = evaluate_step(self.state, self.config)
+        self.state = record_history(self.state)
 
     def set_spump_target(self, value: float):
         self.state.spumpstarg = np.clip(value, 0.0, 1.0)

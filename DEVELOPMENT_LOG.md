@@ -36,6 +36,7 @@
   - decouple physics from control
   - build pure numeric primitives first, then layer the control sequence
   - preserve units clearly and avoid hidden Excel-dependent state
+  - expand tests to cover edge cases and boundary conditions
 
 ### Next action
 - Begin building the Python simulation driver in `src/simulation.py`, based on the VBA step sequence and the pure model primitives in `src/model.py`.
