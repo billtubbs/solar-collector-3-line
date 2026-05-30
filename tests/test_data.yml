@@ -1,0 +1,79 @@
+rho:
+  - localT: 300.0
+    expected: 671.141205355
+fluid_properties:
+  - localT: 300.0
+    expected:
+      dens: 671.141205355
+      Cp: 2.086474291
+      k: 8.235539000000001e-05
+      visc: 0.000473939108460842
+hinside:
+  - localT: 300.0
+    F_line: 0.006
+    R: 0.035
+    expected: 1.0359607196399607
+valve_characteristic:
+  - valvex: 0.9
+    expected: 0.6762433378062415
+flow_rate_from_valve:
+  - valvex: 0.9
+    Cv: 0.002777777777777778
+    dPpump: 3.0
+    G: 0.671141205355
+    flowaest: 0.006
+    Flowb: 0.5
+    expected: 0.003971449367673792
+pump_head_and_dP:
+  - Ftotal: 0.018
+    spumps: 0.8
+    dens: 671.141205355
+    expected:
+      Fmax: 0.04991762222222223
+      dPpump: 532.787200042652
+valve_state_update:
+  - valvextarg: 0.95
+    valvex: 0.9
+    dt: 2.0
+    valvetau: 2.0
+    expected: 0.931606027941428
+pump_speed_update:
+  - spumpstarg: 0.8
+    spumps: 0.75
+    dt: 2.0
+    pumptau: 2.0
+    expected: 0.7816060279414279
+steady_state_exit_temperature:
+  - Tin: 300.0
+    Iradmeas: 0.5713806846630153
+    MirrorWidth: 5.76
+    epsilon: 0.6
+    L: 192.0
+    F_line: 0.006
+    dens: 671.141205355
+    Cp: 2.2
+    expected: 321.3984682745197
+stochastic_disturbance:
+  - prev: 0.0
+    lam: 0.1
+    sigma: 0.05
+    random_pair: [0.1, 0.2]
+    expected: 0.0021828813062832525
+thermal_line_step:
+  - Tb: [300.0, 310.0, 320.0]
+    Tin1: 300.0
+    Mdot_line: 4.02684723213
+    R: 0.035
+    dz: 0.1
+    dt: 0.1
+    Irad1: 0.5713806846630153
+    MirrorWidth: 5.76
+    eff1: 0.6
+    hamb: 0.0036
+    Tamb: 300.0
+    PipeT: [340.0, 350.0, 360.0]
+    Dispersion: 0.0
+    method: B
+    expected:
+      Ta: [300.08407103, 294.22716009, 303.94621763]
+      PipeT: [339.77388794, 349.7705014, 359.76729248]

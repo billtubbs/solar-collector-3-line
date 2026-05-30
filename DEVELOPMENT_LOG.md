@@ -19,6 +19,8 @@
   - `Analysis` sheet contains ~1,164 formula cells and ~1,827 value cells.
 - Created `src/model.py` with pure Python functions derived from `Module1.vba`.
 - Verified the new module imports and basic calculations successfully.
+- Added `tests/test_data.yml` with workbook-derived regression inputs and expected outputs.
+- Added `tests/test_model.py` and verified `11 passed` with pytest for `src/model.py`.
 
 ### Discrepancies / Notes / Improvements
 - `Module1.vba` is highly monolithic and stateful; it relies on module-level global arrays and many direct `Cells(...)` references.

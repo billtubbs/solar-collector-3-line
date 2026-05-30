@@ -5,6 +5,7 @@ DEFAULT_LOG = np.log
 DEFAULT_SQRT = np.sqrt
 DEFAULT_SIN = np.sin
 DEFAULT_PI = 3.14159
+ZERO_CELSIUS = 273.15
 
 
 def clamp_temperature(localT, minT=250.0, maxT=500.0):
@@ -15,7 +16,7 @@ def clamp_temperature(localT, minT=250.0, maxT=500.0):
 def fluid_properties(localT, exp=DEFAULT_EXP):
     """Return fluid density, specific heat, conductivity, and viscosity."""
     localT = clamp_temperature(localT)
-    localTK = localT + 273.15
+    localTK = localT + ZERO_CELSIUS
     fluid_dens = 960.73 + 0.11489 * localTK - 0.001082 * localTK**2
     fluid_Cp = (1108.027 + 1.70714 * localTK) / 1000.0
     fluid_k = (0.19091 - 0.0001894 * localTK) / 1000.0
@@ -26,7 +27,7 @@ def fluid_properties(localT, exp=DEFAULT_EXP):
 def rho(localT):
     """Fluid density as a function of temperature in Celsius."""
     localT = clamp_temperature(localT)
-    localTK = localT + 273.15
+    localTK = localT + ZERO_CELSIUS
     return 960.73 + 0.11489 * localTK - 0.001082 * localTK**2
 
 
@@ -47,7 +48,7 @@ def hinside(
 ):
     """Compute the internal heat transfer coefficient for a single line."""
     localT = clamp_temperature(localT)
-    localTK = localT + 273.15
+    localTK = localT + ZERO_CELSIUS
     fluid_dens, fluid_Cp, fluid_k, fluid_visc = fluid_properties(
         localT, exp=exp
     )
