@@ -1,14 +1,10 @@
-import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
+from pathlib import Path
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
-
-from model import (
+from solar_collector.model import (
     fluid_properties,
     flow_rate_from_valve,
     hinside,
@@ -22,8 +18,8 @@ from model import (
     valve_state_update,
 )
 
-DATA_PATH = ROOT / "tests" / "test_data.yml"
-DATA = yaml.safe_load(DATA_PATH.read_text())
+DATA_PATH = Path(__file__).parent
+DATA = yaml.safe_load((DATA_PATH / "test_data.yml").read_text())
 
 
 def assert_close(actual, expected, rel=1e-9, abs=1e-12):
