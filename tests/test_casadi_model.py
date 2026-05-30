@@ -1,10 +1,14 @@
-
 import casadi as cas
 import numpy as np
 import pytest
 
 from solar_collector.casadi_model import CasadiSolarCollectorModel
-from solar_collector.model import flow_rate_from_valve, pump_head_and_dP, pump_speed_update, valve_state_update
+from solar_collector.model import (
+    flow_rate_from_valve,
+    pump_head_and_dP,
+    pump_speed_update,
+    valve_state_update,
+)
 from solar_collector.simulation import SimulationConfig, SimulationState
 
 
@@ -14,7 +18,9 @@ def make_initial_state(config: SimulationConfig) -> SimulationState:
         (3, 1),
     )
     PipeT = np.tile(
-        np.linspace(config.initial_Tin + 40.0, config.initial_Tin + 135.0, config.N),
+        np.linspace(
+            config.initial_Tin + 40.0, config.initial_Tin + 135.0, config.N
+        ),
         (3, 1),
     )
     F = np.full(3, 0.006)
@@ -49,7 +55,9 @@ def make_initial_state(config: SimulationConfig) -> SimulationState:
     )
 
 
-def pack_state(model: CasadiSolarCollectorModel, state: SimulationState) -> cas.DM:
+def pack_state(
+    model: CasadiSolarCollectorModel, state: SimulationState
+) -> cas.DM:
     return model._pack_state(
         state.spumps,
         state.valvex,
@@ -72,13 +80,21 @@ def test_casadi_model_step_pump_valve_dynamics():
     x0 = pack_state(model, state)
 
     x1 = model.F(0.0, x0, u)
-    spumps_new, valvex_new, F_lines_new, Mdot_lines_new, Tb_new, PipeT_new = model._unpack_state(x1)
+    spumps_new, valvex_new, F_lines_new, Mdot_lines_new, Tb_new, PipeT_new = (
+        model._unpack_state(x1)
+    )
 
     # Pump and valve lag dynamics are independent of the hydraulic balance
-    expected_spumps = pump_speed_update(state.spumpstarg, state.spumps, config.dt, config.pumptau)
-    expected_valvex = valve_state_update(state.valvextarg, state.valvex, config.dt, config.valvetau)
+    expected_spumps = pump_speed_update(
+        state.spumpstarg, state.spumps, config.dt, config.pumptau
+    )
+    expected_valvex = valve_state_update(
+        state.valvextarg, state.valvex, config.dt, config.valvetau
+    )
     assert float(spumps_new) == pytest.approx(expected_spumps, rel=1e-7)
-    assert np.allclose(np.array(valvex_new).flatten(), expected_valvex, rtol=1e-7, atol=1e-9)
+    assert np.allclose(
+        np.array(valvex_new).flatten(), expected_valvex, rtol=1e-7, atol=1e-9
+    )
 
     # Mdot must equal dens * F for every line
     assert np.allclose(
@@ -97,7 +113,9 @@ def test_casadi_model_hydraulic_balance():
     x0 = pack_state(model, state)
 
     x1 = model.F(0.0, x0, u)
-    spumps_new, valvex_new, F_lines_new, Mdot_lines_new, Tb_new, PipeT_new = model._unpack_state(x1)
+    spumps_new, valvex_new, F_lines_new, Mdot_lines_new, Tb_new, PipeT_new = (
+        model._unpack_state(x1)
+    )
 
     F_arr = np.array(F_lines_new).flatten()
     valvex_arr = np.array(valvex_new).flatten()
@@ -106,10 +124,19 @@ def test_casadi_model_hydraulic_balance():
 
     # Re-evaluate pump dP at the solved Ftotal and check valve flows sum back
     _, dPpump_check = pump_head_and_dP(Ftotal_sol, spumps_val, config.dens)
-    F_recomputed = np.array([
-        flow_rate_from_valve(valvex_arr[i], config.Cv, dPpump_check, config.G, 0.0, config.Flowb)
-        for i in range(model.n_lines)
-    ])
+    F_recomputed = np.array(
+        [
+            flow_rate_from_valve(
+                valvex_arr[i],
+                config.Cv,
+                dPpump_check,
+                config.G,
+                0.0,
+                config.Flowb,
+            )
+            for i in range(model.n_lines)
+        ]
+    )
     assert np.allclose(F_recomputed, F_arr, rtol=1e-6)
     assert pytest.approx(F_recomputed.sum(), rel=1e-6) == Ftotal_sol
 

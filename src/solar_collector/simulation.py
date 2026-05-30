@@ -129,7 +129,6 @@ def record_history(state: "SimulationState") -> "SimulationState":
     return new_state
 
 
-
 @dataclass
 class SimulationConfig:
     N: int = 20

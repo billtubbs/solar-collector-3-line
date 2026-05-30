@@ -30,9 +30,7 @@ def fluid_properties(
     max=DEFAULT_MAX,
 ):
     """Return fluid density, specific heat, conductivity, and viscosity."""
-    localT = clamp_temperature(
-        localT, min=min, max=max
-    )
+    localT = clamp_temperature(localT, min=min, max=max)
     localTK = localT + ZERO_CELSIUS
     fluid_dens = 960.73 + 0.11489 * localTK - 0.001082 * localTK**2
     fluid_Cp = (1108.027 + 1.70714 * localTK) / 1000.0
@@ -43,18 +41,14 @@ def fluid_properties(
 
 def rho(localT, min=DEFAULT_MIN, max=DEFAULT_MAX):
     """Fluid density as a function of temperature in Celsius."""
-    localT = clamp_temperature(
-        localT, min=min, max=max
-    )
+    localT = clamp_temperature(localT, min=min, max=max)
     localTK = localT + ZERO_CELSIUS
     return 960.73 + 0.11489 * localTK - 0.001082 * localTK**2
 
 
 def rhocp(localT, min=DEFAULT_MIN, max=DEFAULT_MAX):
     """Fluid density times heat capacity for the working fluid."""
-    fluid_dens, fluid_Cp, *_ = fluid_properties(
-        localT, min=min, max=max
-    )
+    fluid_dens, fluid_Cp, *_ = fluid_properties(localT, min=min, max=max)
     return fluid_dens * fluid_Cp
 
 
@@ -70,9 +64,7 @@ def hinside(
     max=DEFAULT_MAX,
 ):
     """Compute the internal heat transfer coefficient for a single line."""
-    localT = clamp_temperature(
-        localT, min=min, max=max
-    )
+    localT = clamp_temperature(localT, min=min, max=max)
     localTK = localT + ZERO_CELSIUS
     fluid_dens, fluid_Cp, fluid_k, fluid_visc = fluid_properties(
         localT, exp=exp, min=min, max=max
@@ -244,7 +236,8 @@ def thermal_line_step(
             (hinside_func(Tb[0], Mdot_line / rho_Tb[0], R, exp=exp) / ProcessE)
             * (PipeT_new[0] - Tb[0])
         )
-        - (Mdot_line / rho(Tb[0], min=min, max=max) / ProcessF) * (Tb[0] - Tin1)
+        - (Mdot_line / rho(Tb[0], min=min, max=max) / ProcessF)
+        * (Tb[0] - Tin1)
         + ProcessC * (Tb[1] - 2.0 * Tb[0] + Tin1)
     )
 

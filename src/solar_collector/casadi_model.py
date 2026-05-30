@@ -33,9 +33,13 @@ def _casadi_rho(T):
 
 def _casadi_hinside(localT, F_line, R, **kwargs):
     return hinside(
-        localT, F_line, R,
-        exp=cas.exp, pi=cas.pi,
-        min=_casadi_min, max=_casadi_max,
+        localT,
+        F_line,
+        R,
+        exp=cas.exp,
+        pi=cas.pi,
+        min=_casadi_min,
+        max=_casadi_max,
     )
 
 
@@ -85,21 +89,29 @@ class CasadiSolarCollectorModel:
         self.nu = 1 + self.n_lines
         self.ny = 1 + 2 * self.n_lines
         self.input_names = ["spumpstarg"] + [
-            f"valvextarg{i+1}" for i in range(self.n_lines)
+            f"valvextarg{i + 1}" for i in range(self.n_lines)
         ]
         self.state_names = (
             ["spumps"]
-            + [f"valvex{i+1}" for i in range(self.n_lines)]
-            + [f"F{i+1}" for i in range(self.n_lines)]
-            + [f"Mdot{i+1}" for i in range(self.n_lines)]
-            + [f"Tb{i+1}_{j+1}" for i in range(self.n_lines) for j in range(self.N)]
-            + [f"PipeT{i+1}_{j+1}" for i in range(self.n_lines) for j in range(self.N)]
+            + [f"valvex{i + 1}" for i in range(self.n_lines)]
+            + [f"F{i + 1}" for i in range(self.n_lines)]
+            + [f"Mdot{i + 1}" for i in range(self.n_lines)]
+            + [
+                f"Tb{i + 1}_{j + 1}"
+                for i in range(self.n_lines)
+                for j in range(self.N)
+            ]
+            + [
+                f"PipeT{i + 1}_{j + 1}"
+                for i in range(self.n_lines)
+                for j in range(self.N)
+            ]
         )
-        self.output_names = ["Ftotal"] + [
-            f"F{i+1}" for i in range(self.n_lines)
-        ] + [
-            f"T2exit{i+1}" for i in range(self.n_lines)
-        ]
+        self.output_names = (
+            ["Ftotal"]
+            + [f"F{i + 1}" for i in range(self.n_lines)]
+            + [f"T2exit{i + 1}" for i in range(self.n_lines)]
+        )
         self.params = {}
         self.flow_balance = self._build_flow_balance_solver()
         self.t = cas.SX.sym("t")
@@ -130,15 +142,26 @@ class CasadiSolarCollectorModel:
         p = cas.SX.sym("p", 1 + self.n_lines)
         spumps_p = p[0]
         valvex_p = p[1:]
-        _, dPpump = pump_head_and_dP(z, spumps_p, self.config.dens, min=_casadi_min)
-        F_computed = cas.sum1(cas.vertcat(*[
-            flow_rate_from_valve(
-                valvex_p[i], self.config.Cv, dPpump,
-                self.config.G, 0.0, self.config.Flowb,
-                sqrt=cas.sqrt, where=_casadi_where,
+        _, dPpump = pump_head_and_dP(
+            z, spumps_p, self.config.dens, min=_casadi_min
+        )
+        F_computed = cas.sum1(
+            cas.vertcat(
+                *[
+                    flow_rate_from_valve(
+                        valvex_p[i],
+                        self.config.Cv,
+                        dPpump,
+                        self.config.G,
+                        0.0,
+                        self.config.Flowb,
+                        sqrt=cas.sqrt,
+                        where=_casadi_where,
+                    )
+                    for i in range(self.n_lines)
+                ]
             )
-            for i in range(self.n_lines)
-        ]))
+        )
         rfp = cas.Function("rfp", [z, p], [F_computed - z])
         return cas.rootfinder("flow_balance", "newton", rfp)
 
@@ -175,8 +198,12 @@ class CasadiSolarCollectorModel:
             spumpstarg, spumps, self.dt, self.config.pumptau, exp=cas.exp
         )
         valvex_new = valve_state_update(
-            valvextarg, valvex, self.dt, self.config.valvetau,
-            exp=cas.exp, clip=_casadi_clip,
+            valvextarg,
+            valvex,
+            self.dt,
+            self.config.valvetau,
+            exp=cas.exp,
+            clip=_casadi_clip,
         )
 
         Ftotal_init = cas.sum1(F_lines)
@@ -187,14 +214,21 @@ class CasadiSolarCollectorModel:
             Ftotal_sol, spumps_new, self.config.dens, min=_casadi_min
         )
 
-        F_lines_new = cas.vertcat(*[
-            flow_rate_from_valve(
-                valvex_new[i], self.config.Cv, dPpump,
-                self.config.G, 0.0, self.config.Flowb,
-                sqrt=cas.sqrt, where=_casadi_where,
-            )
-            for i in range(self.n_lines)
-        ])
+        F_lines_new = cas.vertcat(
+            *[
+                flow_rate_from_valve(
+                    valvex_new[i],
+                    self.config.Cv,
+                    dPpump,
+                    self.config.G,
+                    0.0,
+                    self.config.Flowb,
+                    sqrt=cas.sqrt,
+                    where=_casadi_where,
+                )
+                for i in range(self.n_lines)
+            ]
+        )
         Mdot_lines_new = self.config.dens * F_lines_new
 
         Tb_rows, PipeT_rows = [], []

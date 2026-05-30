@@ -19,7 +19,7 @@ def ensure_dir(path: str) -> None:
 def extract(xlsm_path: str, out_dir: str = "excel/macros") -> int:
     try:
         from oletools.olevba import VBA_Parser
-    except Exception as e:
+    except Exception:
         print(
             "oletools is required but not installed. Install with: python -m pip install oletools",
             file=sys.stderr,
