@@ -40,7 +40,40 @@ def _casadi_hinside(localT, F_line, R, **kwargs):
 
 
 class CasadiSolarCollectorModel:
-    """CasADi discrete-time model for the 3-line solar collector."""
+    """CasADi discrete-time model for the 3-line parabolic solar collector.
+
+    Mirrors the StateSpaceModelDT interface from the casadi-models package
+    (duck-type compatible; no hard dependency on that package).
+
+    State vector x  (n = 1 + 3*n_lines + 2*n_lines*N elements)
+    ─────────────────────────────────────────────────────────────
+    spumps           pump speed fraction                          [0, 1]
+    valvex1..3       valve stem positions per line                [0.1, 1.0]
+    F1..3            volumetric flow rate per line                [m³/s]
+    Mdot1..3         mass flow rate per line                      [kg/s]
+    Tb{i}_{k}        fluid temperature at segment k, line i       [°C]
+    PipeT{i}_{k}     pipe wall temperature at segment k, line i   [°C]
+
+    Input vector u  (nu = 1 + n_lines elements)
+    ────────────────────────────────────────────
+    spumpstarg       pump speed target                            [0, 1]
+    valvextarg1..3   valve stem targets per line                  [0.1, 1.0]
+
+    Output vector y  (ny = 1 + 2*n_lines elements)
+    ────────────────────────────────────────────────
+    Ftotal           total volumetric flow rate                   [m³/s]
+    F1..3            per-line volumetric flow rates               [m³/s]
+    T2exit1..3       fluid temperature at exit segment, line i    [°C]
+
+    CasADi Functions
+    ─────────────────
+    F(t, xk, uk) -> xkp1   discrete-time state transition
+    H(t, xk, uk) -> yk      output map
+
+    The hydraulic balance (pump curve vs. valve equations) is solved at each
+    step by a CasADi Newton rootfinder embedded in the state-update graph,
+    replacing the 10-step successive-substitution loop in the original VBA.
+    """
 
     def __init__(self, config, name: str = None):
         self.config = config
@@ -68,6 +101,7 @@ class CasadiSolarCollectorModel:
             f"T2exit{i+1}" for i in range(self.n_lines)
         ]
         self.params = {}
+        self.flow_balance = self._build_flow_balance_solver()
         self.t = cas.SX.sym("t")
         self.x = cas.SX.sym("x", self.n)
         self.u = cas.SX.sym("u", self.nu)
@@ -85,6 +119,28 @@ class CasadiSolarCollectorModel:
             ["t", "xk", "uk"],
             ["yk"],
         )
+
+    def _build_flow_balance_solver(self):
+        """Return a CasADi rootfinder that solves the pump/valve hydraulic balance.
+
+        Variable z = Ftotal (scalar).  Parameters p = [spumps, valvex_0..2].
+        Residual: sum_i(F_i(valvex_i, dPpump(z, spumps))) - z = 0.
+        """
+        z = cas.SX.sym("Ftotal")
+        p = cas.SX.sym("p", 1 + self.n_lines)
+        spumps_p = p[0]
+        valvex_p = p[1:]
+        _, dPpump = pump_head_and_dP(z, spumps_p, self.config.dens, min=_casadi_min)
+        F_computed = cas.sum1(cas.vertcat(*[
+            flow_rate_from_valve(
+                valvex_p[i], self.config.Cv, dPpump,
+                self.config.G, 0.0, self.config.Flowb,
+                sqrt=cas.sqrt, where=_casadi_where,
+            )
+            for i in range(self.n_lines)
+        ]))
+        rfp = cas.Function("rfp", [z, p], [F_computed - z])
+        return cas.rootfinder("flow_balance", "newton", rfp)
 
     def _unpack_state(self, x):
         offset = 1 + 3 * self.n_lines
@@ -123,9 +179,12 @@ class CasadiSolarCollectorModel:
             exp=cas.exp, clip=_casadi_clip,
         )
 
-        Ftotal = cas.sum1(F_lines)
+        Ftotal_init = cas.sum1(F_lines)
+        p_bal = cas.vertcat(spumps_new, valvex_new)
+        Ftotal_sol = self.flow_balance(Ftotal_init, p_bal)[0]
+
         _, dPpump = pump_head_and_dP(
-            Ftotal, spumps_new, self.config.dens, min=_casadi_min
+            Ftotal_sol, spumps_new, self.config.dens, min=_casadi_min
         )
 
         F_lines_new = cas.vertcat(*[
