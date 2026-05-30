@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "solar-collector-3-line"
+version = "0.1.0"
+description = "Dynamic simulator for a parabolic solar collector plant with 3 collector lines (Python/CasADi reimplementation)."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [ { name = "Russ Rhinehart / Research Team", email = "you@example.com" } ]
+keywords = ["solar", "simulation", "casadi", "control", "gymnasium", "reinforcement-learning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only",
+]
+requires-python = ">=3.9"
+
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=1.5",
+    "matplotlib>=3.6",
+    "pyyaml>=6.0",
+    "casadi>=3.5",
+    "gymnasium>=0.28",
+    "tqdm>=4.64",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.2",
+    "pytest-cov",
+    "ruff",
+]
+
+[project.urls]
+Homepage = "https://example.org/solar-collector-3-line"
+Repository = "https://example.org/solar-collector-3-line.git"
+
+[tool.setuptools]
+packages = { find = {} }
