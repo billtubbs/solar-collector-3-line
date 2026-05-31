@@ -102,7 +102,9 @@ def simulate(plant, controller, nT, nd, measurement_fn, name=None):
         d_k = D[k, :].T
 
         u_ctrl_k = measurement_fn(x_pk, d_k)
-        u_plant_k = controller.H(tk, x_ck, u_ctrl_k, *controller.params.values())
+        u_plant_k = controller.H(
+            tk, x_ck, u_ctrl_k, *controller.params.values()
+        )
         y_pk = plant.H(tk, x_pk, u_plant_k, *plant.params.values())
 
         x_pkp1 = plant.F(tk, x_pk, u_plant_k, *plant.params.values())

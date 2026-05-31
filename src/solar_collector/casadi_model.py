@@ -112,14 +112,11 @@ class CasadiSolarCollectorModel:
                 for i in range(self.n_lines)
             ]
         )
-        self.output_names = (
-            [f"Mdot{i + 1}" for i in range(self.n_lines)]
-            + [
-                f"Tb{i + 1}_{j + 1}"
-                for j in range(self.N)
-                for i in range(self.n_lines)
-            ]
-        )
+        self.output_names = [f"Mdot{i + 1}" for i in range(self.n_lines)] + [
+            f"Tb{i + 1}_{j + 1}"
+            for j in range(self.N)
+            for i in range(self.n_lines)
+        ]
         self.params = {}
         self.flow_balance = self._build_flow_balance_solver()
         self.t = cas.SX.sym("t")
