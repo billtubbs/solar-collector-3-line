@@ -61,7 +61,6 @@ def pack_state(
     return model._pack_state(
         state.spumps,
         state.valvex,
-        cas.DM(state.F),
         cas.DM(state.Mdot),
         cas.DM(state.Tb),
         cas.DM(state.PipeT),
@@ -80,7 +79,7 @@ def test_casadi_model_step_pump_valve_dynamics():
     x0 = pack_state(model, state)
 
     x1 = model.F(0.0, x0, u)
-    spumps_new, valvex_new, F_lines_new, Mdot_lines_new, Tb_new, PipeT_new = (
+    spumps_new, valvex_new, Mdot_lines_new, Tb_new, PipeT_new = (
         model._unpack_state(x1)
     )
 
@@ -96,13 +95,6 @@ def test_casadi_model_step_pump_valve_dynamics():
         np.array(valvex_new).flatten(), expected_valvex, rtol=1e-7, atol=1e-9
     )
 
-    # Mdot must equal dens * F for every line
-    assert np.allclose(
-        np.array(Mdot_lines_new).flatten(),
-        config.dens * np.array(F_lines_new).flatten(),
-        rtol=1e-10,
-    )
-
 
 def test_casadi_model_hydraulic_balance():
     """Flow rates from model.F must satisfy the pump/valve balance equation."""
@@ -113,11 +105,11 @@ def test_casadi_model_hydraulic_balance():
     x0 = pack_state(model, state)
 
     x1 = model.F(0.0, x0, u)
-    spumps_new, valvex_new, F_lines_new, Mdot_lines_new, Tb_new, PipeT_new = (
+    spumps_new, valvex_new, Mdot_lines_new, Tb_new, PipeT_new = (
         model._unpack_state(x1)
     )
 
-    F_arr = np.array(F_lines_new).flatten()
+    F_arr = np.array(Mdot_lines_new).flatten() / config.dens
     valvex_arr = np.array(valvex_new).flatten()
     spumps_val = float(spumps_new)
     Ftotal_sol = float(F_arr.sum())
@@ -149,5 +141,9 @@ def test_casadi_model_output_function_returns_expected_shape():
     u = pack_input(state)
 
     y = model.H(0.0, x0, u)
-    assert y.shape == (7, 1)
-    assert float(y[0]) == pytest.approx(np.sum(state.F), rel=1e-7)
+    assert y.shape == (model.ny, 1)
+    assert np.allclose(
+        np.array(y[:model.n_lines]).flatten(),
+        state.Mdot,
+        rtol=1e-7,
+    )

@@ -95,21 +95,18 @@ N = cfg.N
 n_lines = plant.n_lines
 n = plant.n
 
-# Hydraulic-balance flow rate for the initial pump/valve conditions
+# Hydraulic-balance Mdot for the initial pump/valve conditions
 p_init = np.array([SPUMP_NOMINAL, 0.9, 0.9, 0.9])
-Ftotal_guess = 3 * 0.003  # rough initial guess [m³/s]
-Ftotal_ss = float(plant.flow_balance(Ftotal_guess, p_init)[0])
-f_init = Ftotal_ss / n_lines
-mdot_init = f_init * cfg.dens
+Ftotal_ss = float(plant.flow_balance(3 * 0.003, p_init)[0])
+mdot_init = cfg.dens * Ftotal_ss / n_lines
 
 x0 = np.zeros(n)
 x0[0] = SPUMP_NOMINAL
 x0[1:4] = 0.9
-x0[4:7] = f_init
-x0[7:10] = mdot_init
+x0[4:7] = mdot_init
 
 # Column-major layout: flat index k*n_lines + line  →  Tb[line, k]
-tb_off = 1 + 3 * n_lines
+tb_off = 1 + 2 * n_lines
 pipe_off = tb_off + n_lines * N
 Tb_profile = 300.0 + 95.0 * np.arange(1, N + 1) / N
 PipeT_profile = 354.0 + 95.0 * np.arange(1, N + 1) / N
@@ -134,7 +131,9 @@ X_ds = np.empty((n_chunks + 1, n))
 t_ds = np.empty(n_chunks + 1)
 
 t_step_s = T_STEP_K * dt
-print(f"\nRunning {N_STEPS:,} steps  (dt = {dt:.4f} s  →  {N_STEPS * dt:.1f} s total)")
+print(
+    f"\nRunning {N_STEPS:,} steps  (dt = {dt:.4f} s  →  {N_STEPS * dt:.1f} s total)"
+)
 print(
     f"  Pump speed step-up: {SPUMP_NOMINAL} → {SPUMP_STEPPED}  "
     f"at step {T_STEP_K} (t = {t_step_s:.1f} s)"
@@ -188,11 +187,13 @@ print(
     f"(every {N_CHUNK} steps = {N_CHUNK * dt:.1f} s)"
 )
 print("\nFinal state summary:")
-print(f"  Ftotal  : {float(Y[-1, 0]):.5f}  m³/s")
+mdot_final = [float(Y[-1, i]) for i in range(n_lines)]
+print(f"  Mdottotal: {sum(mdot_final):.5f}  kg/s")
 for i in range(n_lines):
-    print(f"  F{i + 1}      : {float(Y[-1, i + 1]):.5f}  m³/s")
+    print(f"  Mdot{i + 1}   : {mdot_final[i]:.5f}  kg/s")
 for i in range(n_lines):
-    print(f"  T2exit{i + 1} : {float(Y[-1, 4 + i]):.2f}  °C")
+    T2exit_idx = n_lines + (N - 1) * n_lines + i
+    print(f"  T2exit{i + 1} : {float(Y[-1, T2exit_idx]):.2f}  °C")
 
 
 # ── Build results DataFrame ────────────────────────────────────────────────
@@ -216,8 +217,8 @@ u_snaps = np.where(
 
 all_data = np.hstack(
     [
-        u_snaps,        # inputs  ((n_chunks+1) × 4)
-        X_ds,           # states  ((n_chunks+1) × n)
+        u_snaps,  # inputs  ((n_chunks+1) × 4)
+        X_ds,  # states  ((n_chunks+1) × n)
         Y[snap_steps],  # outputs ((n_chunks+1) × ny)
     ]
 )
@@ -238,18 +239,18 @@ print(
 
 # ── Make time series plots ───────────────────────────────────────────────
 
-temp_labels = ["T2exit1", "T2exit2", "T2exit3"]
-flow_labels = ["F1", "F2", "F3"]
+exit_temp_labels = [f"Tb{i + 1}_{N}" for i in range(n_lines)]
+mdot_labels = [f"Mdot{i + 1}" for i in range(n_lines)]
 valve_labels = ["valvextarg1", "valvextarg2", "valvextarg3"]
 
 plot_data = {
-    "Temperatures": {
-        "y": sim_results["outputs"][temp_labels].values,
-        "labels": temp_labels,
+    "Exit Temperatures": {
+        "y": sim_results["outputs"][exit_temp_labels].values,
+        "labels": exit_temp_labels,
     },
-    "Flow Rates": {
-        "y": sim_results["outputs"][flow_labels].values,
-        "labels": flow_labels,
+    "Mass Flow Rates": {
+        "y": sim_results["outputs"][mdot_labels].values,
+        "labels": mdot_labels,
     },
     "Valve Positions": {
         "y": sim_results["inputs"][valve_labels].values,

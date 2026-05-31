@@ -49,11 +49,10 @@ class CasadiSolarCollectorModel:
     Mirrors the StateSpaceModelDT interface from the casadi-models package
     (duck-type compatible; no hard dependency on that package).
 
-    State vector x  (n = 1 + 3*n_lines + 2*n_lines*N elements)
+    State vector x  (n = 1 + 2*n_lines + 2*n_lines*N elements)
     ─────────────────────────────────────────────────────────────
     spumps           pump speed fraction                          [0, 1]
     valvex1..3       valve stem positions per line                [0.1, 1.0]
-    F1..3            volumetric flow rate per line                [m³/s]
     Mdot1..3         mass flow rate per line                      [kg/s]
     Tb{i}_{k}        fluid temperature at segment k, line i       [°C]
     PipeT{i}_{k}     pipe wall temperature at segment k, line i   [°C]
@@ -63,11 +62,13 @@ class CasadiSolarCollectorModel:
     spumpstarg       pump speed target                            [0, 1]
     valvextarg1..3   valve stem targets per line                  [0.1, 1.0]
 
-    Output vector y  (ny = 1 + 2*n_lines elements)
-    ────────────────────────────────────────────────
-    Ftotal           total volumetric flow rate                   [m³/s]
-    F1..3            per-line volumetric flow rates               [m³/s]
-    T2exit1..3       fluid temperature at exit segment, line i    [°C]
+    Output vector y  (ny = n_lines + n_lines*N elements)
+    ─────────────────────────────────────────────────────
+    Mdot1..3         per-line mass flow rates                     [kg/s]
+    Tb{i}_{k}        fluid temperature at segment k, line i       [°C]
+
+    Volumetric flow at any axial position can be derived post-hoc as
+    F_i(k) = Mdot_i / rho(Tb_i_k).  Exit temperatures are Tb{i}_N.
 
     CasADi Functions
     ─────────────────
@@ -85,16 +86,15 @@ class CasadiSolarCollectorModel:
         self.n_lines = 3
         self.N = config.N
         self.dt = config.dt
-        self.n = 1 + 3 * self.n_lines + 2 * self.n_lines * self.N
+        self.n = 1 + 2 * self.n_lines + 2 * self.n_lines * self.N
         self.nu = 1 + self.n_lines
-        self.ny = 1 + 2 * self.n_lines
+        self.ny = self.n_lines + self.n_lines * self.N
         self.input_names = ["spumpstarg"] + [
             f"valvextarg{i + 1}" for i in range(self.n_lines)
         ]
         self.state_names = (
             ["spumps"]
             + [f"valvex{i + 1}" for i in range(self.n_lines)]
-            + [f"F{i + 1}" for i in range(self.n_lines)]
             + [f"Mdot{i + 1}" for i in range(self.n_lines)]
             + [
                 f"Tb{i + 1}_{j + 1}"
@@ -108,9 +108,12 @@ class CasadiSolarCollectorModel:
             ]
         )
         self.output_names = (
-            ["Ftotal"]
-            + [f"F{i + 1}" for i in range(self.n_lines)]
-            + [f"T2exit{i + 1}" for i in range(self.n_lines)]
+            [f"Mdot{i + 1}" for i in range(self.n_lines)]
+            + [
+                f"Tb{i + 1}_{j + 1}"
+                for j in range(self.N)
+                for i in range(self.n_lines)
+            ]
         )
         self.params = {}
         self.flow_balance = self._build_flow_balance_solver()
@@ -166,32 +169,30 @@ class CasadiSolarCollectorModel:
         return cas.rootfinder("flow_balance", "newton", rfp)
 
     def _unpack_state(self, x):
-        offset = 1 + 3 * self.n_lines
+        offset = 1 + 2 * self.n_lines
         spumps = x[0]
         valvex = x[1 : 1 + self.n_lines]
-        F_lines = x[1 + self.n_lines : 1 + 2 * self.n_lines]
-        Mdot_lines = x[1 + 2 * self.n_lines : 1 + 3 * self.n_lines]
+        Mdot_lines = x[1 + self.n_lines : 1 + 2 * self.n_lines]
         Tb_flat = x[offset : offset + self.n_lines * self.N]
         PipeT_flat = x[offset + self.n_lines * self.N :]
         Tb = cas.reshape(Tb_flat, self.n_lines, self.N)
         PipeT = cas.reshape(PipeT_flat, self.n_lines, self.N)
-        return spumps, valvex, F_lines, Mdot_lines, Tb, PipeT
+        return spumps, valvex, Mdot_lines, Tb, PipeT
 
     def _unpack_input(self, u):
         return u[0], u[1 : 1 + self.n_lines]
 
-    def _pack_state(self, spumps, valvex, F_lines, Mdot_lines, Tb, PipeT):
+    def _pack_state(self, spumps, valvex, Mdot_lines, Tb, PipeT):
         return cas.vertcat(
             spumps,
             valvex,
-            F_lines,
             Mdot_lines,
             cas.reshape(Tb, -1, 1),
             cas.reshape(PipeT, -1, 1),
         )
 
     def _state_update(self, t, x, u):
-        spumps, valvex, F_lines, Mdot_lines, Tb, PipeT = self._unpack_state(x)
+        spumps, valvex, Mdot_lines, Tb, PipeT = self._unpack_state(x)
         spumpstarg, valvextarg = self._unpack_input(u)
 
         spumps_new = pump_speed_update(
@@ -206,7 +207,7 @@ class CasadiSolarCollectorModel:
             clip=_casadi_clip,
         )
 
-        Ftotal_init = cas.sum1(F_lines)
+        Ftotal_init = cas.sum1(Mdot_lines) / self.config.dens
         p_bal = cas.vertcat(spumps_new, valvex_new)
         Ftotal_sol = self.flow_balance(Ftotal_init, p_bal)[0]
 
@@ -261,14 +262,11 @@ class CasadiSolarCollectorModel:
         return self._pack_state(
             spumps_new,
             valvex_new,
-            F_lines_new,
             Mdot_lines_new,
             cas.vertcat(*Tb_rows),
             cas.vertcat(*PipeT_rows),
         )
 
     def _output_map(self, t, x, u):
-        _, _, F_lines, _, Tb, _ = self._unpack_state(x)
-        T2exit = Tb[:, self.N - 1]
-        Ftotal = cas.sum1(F_lines)
-        return cas.vertcat(Ftotal, F_lines, T2exit)
+        _, _, Mdot_lines, Tb, _ = self._unpack_state(x)
+        return cas.vertcat(Mdot_lines, cas.reshape(Tb, -1, 1))
