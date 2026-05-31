@@ -23,6 +23,7 @@ IRAD_INIT = 0.95  # [kW/m²] initial solar irradiance
 STEPS_PER_FRAME = 1  # simulation steps per animation frame
 HISTORY_LEN = 600  # time points kept in scrolling plots (~148 s at dt=0.246)
 FRAME_INTERVAL_MS = 50  # target ms between frames (≈ 20 fps ceiling)
+PLOT_HORIZON = 60.0  # seconds of history shown in time-series plots
 
 # ── Plant configuration ────────────────────────────────────────────────────
 
@@ -101,5 +102,6 @@ live = SolarCollectorLiveSim(
     steps_per_frame=STEPS_PER_FRAME,
     history_len=HISTORY_LEN,
     frame_interval_ms=FRAME_INTERVAL_MS,
+    plot_horizon=PLOT_HORIZON,
 )
 live.run()

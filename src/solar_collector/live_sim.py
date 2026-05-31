@@ -52,6 +52,7 @@ class SolarCollectorLiveSim:
         steps_per_frame: int = 1,
         history_len: int = 600,
         frame_interval_ms: int = 50,
+        plot_horizon: float = 60.0,
     ):
         self.plant = plant
         self.x = x0.copy()
@@ -60,6 +61,7 @@ class SolarCollectorLiveSim:
         self.steps_per_frame = steps_per_frame
         self.history_len = history_len
         self.frame_interval_ms = frame_interval_ms
+        self.plot_horizon = plot_horizon
 
         self.n_lines = plant.n_lines
         self.N = plant.N
@@ -115,6 +117,9 @@ class SolarCollectorLiveSim:
         self._irad_line = None
         self._tin_ts_line = None
         self._ts_axes = []
+        self._btn = None
+        self._running = True
+        self._time_text = None
 
     # ── State accessors ────────────────────────────────────────────────────
 
@@ -349,6 +354,31 @@ class SolarCollectorLiveSim:
             sl.on_changed(_cb)
             self._sliders[key] = sl
 
+        # Time counter + Start/Stop button in the empty row-0, left-column slot
+        btn_w = 0.09
+        btn_x = col0_left + col_w - btn_w
+        time_y = row_bottom[0] + sl_h / 2
+        self._time_text = fig.text(
+            col0_left, time_y, "t =    0.0 s",
+            va="center", ha="left", fontsize=9,
+            fontweight="bold", fontfamily="monospace",
+        )
+        ax_btn = fig.add_axes([btn_x, row_bottom[0], btn_w, sl_h])
+        self._btn = mwidgets.Button(ax_btn, "STOP")
+        self._btn.label.set_fontweight("bold")
+
+        def _toggle(_event):
+            if self._running:
+                self._anim.pause()
+                self._btn.label.set_text("START")
+            else:
+                self._anim.resume()
+                self._btn.label.set_text("STOP")
+            self._running = not self._running
+            fig.canvas.draw_idle()
+
+        self._btn.on_clicked(_toggle)
+
     # ── Animation callbacks ────────────────────────────────────────────────
 
     def _all_ts_lines(self):
@@ -372,6 +402,7 @@ class SolarCollectorLiveSim:
         for _ in range(self.steps_per_frame):
             self._step()
         self._record()
+        self._time_text.set_text(f"t = {self.t:6.1f} s")
 
         # Spatial profiles — copy avoids stale-view issue when self.x is replaced
         for i in range(self.n_lines):
@@ -382,9 +413,10 @@ class SolarCollectorLiveSim:
             return self._all_artists()
 
         t_arr = np.array(self._t_buf)
-        t0, t1 = float(t_arr[0]), float(t_arr[-1])
+        t1 = float(t_arr[-1])
+        t0_plot = max(float(t_arr[0]), t1 - self.plot_horizon)
         for ax in self._ts_axes:
-            ax.set_xlim(t0, max(t1, t0 + 10.0))
+            ax.set_xlim(t0_plot, t0_plot + self.plot_horizon)
 
         T_exit_arr = np.array(self._Texit_buf)
         mdot_arr = np.array(self._mdot_buf)
