@@ -88,6 +88,25 @@
   implemented; needed before `simulate` can be used with the full cascade.
 - Gymnasium environment wrapper not yet started.
 
+- **Added `run_simulation_ol.py`** — open-loop simulation script using
+  `make_open_loop_simulation`:
+  - Single plant model (`CasadiSolarCollectorModel`) with fixed irradiance.
+  - Pump speed step change (`SPUMP_NOMINAL → SPUMP_STEPPED`) at step
+    `T_STEP_K`; step must fall on a chunk boundary so only one CasADi
+    simulation function is needed.
+  - Flow rates initialised via `plant.flow_balance` (the hydraulic Newton
+    rootfinder) rather than a density-based heuristic, eliminating a
+    spurious transient at t = 0.
+  - Saves results to `results/simulation_ol.npz` and `results/simulation_ol.csv`
+    (inputs, states, outputs at every `N_CHUNK` steps).
+  - Produces four-panel time-series plots (temperatures, flow rates, valve
+    positions, pump speed) via `plot_utils.make_tsplots`.
+- **Added `plot_utils.py`** — lightweight Matplotlib helpers:
+  - `make_tsplots(t, plot_data, ...)`: stacked subplots from a dict of
+    named panels; supports `"plot"` and `"step"` trace kinds.
+  - `make_ioplots(t, inputs, states, outputs, ...)`: convenience wrapper
+    that organises outputs, states, and inputs into labelled panels.
+
 ### Next actions
 - Validate the hydraulic balance against stored spreadsheet snapshots.
 - Compose the cascade controllers into a single combined controller.
