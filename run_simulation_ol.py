@@ -122,8 +122,8 @@ x0[pipe_off : pipe_off + n_lines * N] = np.tile(
 
 dt = cfg.dt
 t_array = np.arange(N_STEPS + 1) * dt
-u_pre = np.array([SPUMP_NOMINAL, 0.9, 0.9, 0.9])
-u_post = np.array([SPUMP_STEPPED, 0.9, 0.9, 0.9])
+u_pre = np.array([SPUMP_NOMINAL, 0.9, 0.9, 0.9, IRAD_NOMINAL, cfg.Tamb, cfg.initial_Tin])
+u_post = np.array([SPUMP_STEPPED, 0.9, 0.9, 0.9, IRAD_NOMINAL, cfg.Tamb, cfg.initial_Tin])
 
 n_chunks = N_STEPS // N_CHUNK
 Y = np.empty((N_STEPS + 1, plant.ny))
@@ -200,7 +200,7 @@ for i in range(n_lines):
 # Rows: one per state snapshot (every N_CHUNK steps), indexed by time [s].
 # X_ds[i] and Y[i*N_CHUNK] both correspond to the state at step i*N_CHUNK.
 
-input_names = ["spumpstarg", "valvextarg1", "valvextarg2", "valvextarg3"]
+input_names = ["spumpstarg", "valvextarg1", "valvextarg2", "valvextarg3", "Irad", "Tamb", "Tin"]
 
 cols = pd.MultiIndex.from_tuples(
     [("inputs", name) for name in input_names]

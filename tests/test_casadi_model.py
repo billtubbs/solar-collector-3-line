@@ -67,15 +67,21 @@ def pack_state(
     )
 
 
-def pack_input(state: SimulationState) -> cas.DM:
-    return cas.vertcat(state.spumpstarg, cas.DM(state.valvextarg))
+def pack_input(state: SimulationState, config: SimulationConfig) -> cas.DM:
+    return cas.vertcat(
+        state.spumpstarg,
+        cas.DM(state.valvextarg),
+        config.Irad,
+        config.Tamb,
+        config.initial_Tin,
+    )
 
 
 def test_casadi_model_step_pump_valve_dynamics():
     config = SimulationConfig()
     model = CasadiSolarCollectorModel(config)
     state = make_initial_state(config)
-    u = pack_input(state)
+    u = pack_input(state, config)
     x0 = pack_state(model, state)
 
     x1 = model.F(0.0, x0, u)
@@ -101,7 +107,7 @@ def test_casadi_model_hydraulic_balance():
     config = SimulationConfig()
     model = CasadiSolarCollectorModel(config)
     state = make_initial_state(config)
-    u = pack_input(state)
+    u = pack_input(state, config)
     x0 = pack_state(model, state)
 
     x1 = model.F(0.0, x0, u)
@@ -138,7 +144,7 @@ def test_casadi_model_output_function_returns_expected_shape():
     model = CasadiSolarCollectorModel(config)
     state = make_initial_state(config)
     x0 = pack_state(model, state)
-    u = pack_input(state)
+    u = pack_input(state, config)
 
     y = model.H(0.0, x0, u)
     assert y.shape == (model.ny, 1)

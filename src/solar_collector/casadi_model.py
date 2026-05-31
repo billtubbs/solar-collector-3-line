@@ -57,10 +57,13 @@ class CasadiSolarCollectorModel:
     Tb{i}_{k}        fluid temperature at segment k, line i       [°C]
     PipeT{i}_{k}     pipe wall temperature at segment k, line i   [°C]
 
-    Input vector u  (nu = 1 + n_lines elements)
-    ────────────────────────────────────────────
+    Input vector u  (nu = 1 + n_lines + 3 elements)
+    ─────────────────────────────────────────────────
     spumpstarg       pump speed target                            [0, 1]
     valvextarg1..3   valve stem targets per line                  [0.1, 1.0]
+    Irad             direct normal irradiance                     [kW/m²]
+    Tamb             ambient temperature                          [°C]
+    Tin              collector inlet fluid temperature            [°C]
 
     Output vector y  (ny = n_lines + n_lines*N elements)
     ─────────────────────────────────────────────────────
@@ -87,11 +90,13 @@ class CasadiSolarCollectorModel:
         self.N = config.N
         self.dt = config.dt
         self.n = 1 + 2 * self.n_lines + 2 * self.n_lines * self.N
-        self.nu = 1 + self.n_lines
+        self.nu = 1 + self.n_lines + 3  # MV + disturbances (Irad, Tamb, Tin)
         self.ny = self.n_lines + self.n_lines * self.N
-        self.input_names = ["spumpstarg"] + [
-            f"valvextarg{i + 1}" for i in range(self.n_lines)
-        ]
+        self.input_names = (
+            ["spumpstarg"]
+            + [f"valvextarg{i + 1}" for i in range(self.n_lines)]
+            + ["Irad", "Tamb", "Tin"]
+        )
         self.state_names = (
             ["spumps"]
             + [f"valvex{i + 1}" for i in range(self.n_lines)]
@@ -180,7 +185,12 @@ class CasadiSolarCollectorModel:
         return spumps, valvex, Mdot_lines, Tb, PipeT
 
     def _unpack_input(self, u):
-        return u[0], u[1 : 1 + self.n_lines]
+        spumpstarg = u[0]
+        valvextarg = u[1 : 1 + self.n_lines]
+        Irad = u[1 + self.n_lines]
+        Tamb = u[2 + self.n_lines]
+        Tin = u[3 + self.n_lines]
+        return spumpstarg, valvextarg, Irad, Tamb, Tin
 
     def _pack_state(self, spumps, valvex, Mdot_lines, Tb, PipeT):
         return cas.vertcat(
@@ -193,7 +203,7 @@ class CasadiSolarCollectorModel:
 
     def _state_update(self, t, x, u):
         spumps, valvex, Mdot_lines, Tb, PipeT = self._unpack_state(x)
-        spumpstarg, valvextarg = self._unpack_input(u)
+        spumpstarg, valvextarg, Irad, Tamb, Tin = self._unpack_input(u)
 
         spumps_new = pump_speed_update(
             spumpstarg, spumps, self.dt, self.config.pumptau, exp=cas.exp
@@ -236,16 +246,16 @@ class CasadiSolarCollectorModel:
         for line in range(self.n_lines):
             Ta_line, PipeT_line = thermal_line_step(
                 Tb[line, :],
-                self.config.initial_Tin,
+                Tin,
                 Mdot_lines_new[line],
                 self.config.R,
                 self.config.dz,
                 self.dt,
-                self.config.Irad1,
+                Irad,
                 self.config.MirrorWidth,
                 self.config.eff,
                 self.config.hamb,
-                self.config.Tamb,
+                Tamb,
                 PipeT[line, :],
                 self.config.Dispersion,
                 method="B" if self.config.use_backward_diff else "F",
