@@ -1,136 +1,200 @@
-import copy
+"""Simulation functions for the solar collector plant.
+
+The primary entry point is :func:`simulate`, which builds a closed-loop
+CasADi simulation function from a plant model and a controller model.
+:func:`make_open_loop_simulation` builds the simpler open-loop variant.
+
+Both return compiled CasADi Functions that can be evaluated numerically
+or differentiated through for gradient-based optimisation.
+
+Dataclasses
+-----------
+SimulationConfig
+    Physical and numerical configuration for the plant and controllers.
+SimulationState
+    Legacy mutable state snapshot (retained for test compatibility).
+
+Functions
+---------
+simulate
+    Build a closed-loop n-step CasADi simulation function.
+make_open_loop_simulation
+    Build an open-loop n-step CasADi simulation function.
+"""
+
+import casadi as cas
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
-from .model import (
-    flow_rate_from_valve,
-    hinside,
-    pump_head_and_dP,
-    pump_speed_update,
-    rho,
-    thermal_line_step,
-    valve_state_update,
-)
+from .model import hinside, rho
 
 
-def process_step(
-    state: "SimulationState",
-    config: "SimulationConfig",
-    dt: float,
-) -> "SimulationState":
-    new_state = copy.deepcopy(state)
-    exp = config.exp
-    sqrt = config.sqrt
-    rho_func = config.rho_func
-    hinside_func = config.hinside_func
-    pi = config.pi
+def simulate(plant, controller, nT, nd, measurement_fn, name=None):
+    """Build a closed-loop n-step CasADi simulation function.
 
-    new_state.spumps = pump_speed_update(
-        new_state.spumpstarg,
-        new_state.spumps,
-        dt,
-        config.pumptau,
-        exp=exp,
+    Constructs a CasADi Function that simulates a discrete-time feedback
+    loop for nT steps.  At each step k the computation is:
+
+      1. u_ctrl[k]     = measurement_fn(x_plant[k], d[k])
+      2. u_plant[k]    = H_ctrl(t[k], x_ctrl[k], u_ctrl[k])
+      3. y_plant[k]    = H_plant(t[k], x_plant[k], u_plant[k])
+      4. x_plant[k+1]  = F_plant(t[k], x_plant[k], u_plant[k])
+      5. x_ctrl[k+1]   = F_ctrl(t[k], x_ctrl[k], u_ctrl[k])
+
+    Parameters
+    ----------
+    plant : StateSpaceModelDT-compatible object
+        Discrete-time plant model (e.g. CasadiSolarCollectorModel) with
+        attributes ``F``, ``H``, ``n``, ``nu``, ``ny``, ``params``.
+    controller : StateSpaceModelDT-compatible object
+        Discrete-time controller model (e.g. T1PIController) with the
+        same interface.
+    nT : int
+        Number of simulation steps.
+    nd : int
+        Dimension of the disturbance / exogenous input vector d[k].
+    measurement_fn : callable(x_plant, d_k) -> u_ctrl
+        Maps the plant state vector and the current disturbance vector
+        to the controller input vector.  Must be written using CasADi
+        operations so the computation graph can be traced symbolically.
+    name : str, optional
+        Name for the returned CasADi function.  Defaults to
+        ``'closed_loop_sim_{nT}_steps'``.
+
+    Returns
+    -------
+    cas.Function
+        Signature: ``(t_eval, D, x0) -> (X, Y)``
+
+        Inputs:
+          ``t_eval``  (nT+1,)                 time vector
+          ``D``       (nT, nd)                disturbance matrix
+          ``x0``      (n_plant + n_ctrl,)     initial combined state
+
+        Outputs:
+          ``X``  (nT+1, n_plant + n_ctrl)  combined state trajectory
+          ``Y``  (nT+1, ny_plant)          plant output trajectory
+
+        The combined state ``X`` can be split into plant and controller
+        parts using ``X[:, :plant.n]`` and ``X[:, plant.n:]``.
+    """
+    if name is None:
+        name = f"closed_loop_sim_{nT}_steps"
+
+    n_p = plant.n
+    n_c = controller.n
+
+    t_eval = cas.SX.sym("t_eval", nT + 1)
+    D = cas.SX.sym("D", nT, nd)
+    x0 = cas.SX.sym("x0", n_p + n_c)
+
+    X = [x0.T]
+    Y = []
+
+    xk = x0
+    tk = t_eval[0]
+    u_plant_k = cas.SX.zeros(plant.nu)
+
+    for k in range(nT):
+        x_pk = xk[:n_p]
+        x_ck = xk[n_p:]
+        d_k = D[k, :].T
+
+        u_ctrl_k = measurement_fn(x_pk, d_k)
+        u_plant_k = controller.H(tk, x_ck, u_ctrl_k, *controller.params.values())
+        y_pk = plant.H(tk, x_pk, u_plant_k, *plant.params.values())
+
+        x_pkp1 = plant.F(tk, x_pk, u_plant_k, *plant.params.values())
+        x_ckp1 = controller.F(tk, x_ck, u_ctrl_k, *controller.params.values())
+
+        xkp1 = cas.vertcat(x_pkp1, x_ckp1)
+        X.append(xkp1.T)
+        Y.append(y_pk.T)
+        tk = t_eval[k + 1]
+        xk = xkp1
+
+    # Final output at the terminal state using the last inputs
+    y_final = plant.H(tk, xk[:n_p], u_plant_k, *plant.params.values())
+    Y.append(y_final.T)
+
+    return cas.Function(
+        name,
+        [t_eval, D, x0],
+        [cas.vcat(X), cas.vcat(Y)],
+        ["t_eval", "D", "x0"],
+        ["X", "Y"],
     )
-    new_state.valvex = valve_state_update(
-        new_state.valvextarg,
-        new_state.valvex,
-        dt,
-        config.valvetau,
-        exp=exp,
+
+
+def make_open_loop_simulation(plant, nT, name=None):
+    """Build an open-loop n-step CasADi simulation function.
+
+    Equivalent to ``make_n_step_simulation_function_from_model`` in the
+    casadi-models package.  Inputs are provided externally at every step.
+
+    Parameters
+    ----------
+    plant : StateSpaceModelDT-compatible object
+        Discrete-time model with ``F``, ``H``, ``n``, ``nu``, ``ny``,
+        ``params``.
+    nT : int
+        Number of simulation steps.
+    name : str, optional
+        Name for the returned CasADi function.
+
+    Returns
+    -------
+    cas.Function
+        Signature: ``(t_eval, U, x0) -> (X, Y)``
+
+        Inputs:
+          ``t_eval``  (nT+1,)   time vector
+          ``U``       (nT, nu)  input matrix
+          ``x0``      (n,)      initial state
+
+        Outputs:
+          ``X``  (nT+1, n)   state trajectory
+          ``Y``  (nT+1, ny)  output trajectory
+    """
+    if name is None:
+        name = f"{plant.F.name()}_sim_{nT}_steps"
+
+    t_eval = cas.SX.sym("t_eval", nT + 1)
+    U = cas.SX.sym("U", nT, plant.nu)
+    x0 = cas.SX.sym("x0", plant.n)
+
+    X = [x0.T]
+    Y = []
+    xk = x0
+    tk = t_eval[0]
+    uk = cas.SX.zeros(plant.nu)
+
+    for k in range(nT):
+        uk = U[k, :].T
+        xkp1 = plant.F(tk, xk, uk, *plant.params.values())
+        yk = plant.H(tk, xk, uk, *plant.params.values())
+        X.append(xkp1.T)
+        Y.append(yk.T)
+        tk = t_eval[k + 1]
+        xk = xkp1
+
+    yk = plant.H(tk, xk, uk, *plant.params.values())
+    Y.append(yk.T)
+
+    return cas.Function(
+        name,
+        [t_eval, U, x0, *plant.params.values()],
+        [cas.vcat(X), cas.vcat(Y)],
+        ["t_eval", "U", "x0", *plant.params.keys()],
+        ["X", "Y"],
     )
-
-    F_total = state.Ftotal
-    _, dPpump = pump_head_and_dP(
-        F_total,
-        new_state.spumps,
-        config.dens,
-        sqrt=sqrt,
-    )
-
-    for line in range(3):
-        new_state.F[line] = flow_rate_from_valve(
-            new_state.valvex[line],
-            config.Cv,
-            dPpump,
-            config.G,
-            new_state.flowaest[line],
-            config.Flowb,
-            sqrt=sqrt,
-        )
-        new_state.Mdot[line] = config.dens * new_state.F[line]
-
-    new_state.Ftotal = float(np.sum(new_state.F))
-    new_state.Mdottotal = float(np.sum(new_state.Mdot))
-
-    for line in range(3):
-        Ta_line, PipeT_line = thermal_line_step(
-            state.Tb[line],
-            config.initial_Tin,
-            new_state.Mdot[line],
-            config.R,
-            config.dz,
-            dt,
-            new_state.Irad1,
-            config.MirrorWidth,
-            new_state.eff1[line],
-            config.hamb,
-            config.Tamb,
-            state.PipeT[line],
-            config.Dispersion,
-            method="B" if config.use_backward_diff else "F",
-            rho_func=rho_func,
-            hinside_func=hinside_func,
-            exp=exp,
-            pi=pi,
-        )
-        new_state.Ta[line] = Ta_line
-        new_state.PipeT[line] = PipeT_line
-        new_state.Tb[line] = Ta_line
-
-    return new_state
-
-
-def measure_step(
-    state: "SimulationState",
-    config: "SimulationConfig",
-    dt: float,
-    rng: np.random.Generator,
-) -> "SimulationState":
-    new_state = copy.deepcopy(state)
-    measured_noise = rng.normal(scale=config.noise_std, size=3)
-    new_state.Fmeas = 0.95 * new_state.F * (1.0 + measured_noise)
-    new_state.T2meas = np.array([new_state.Ta[line, -1] for line in range(3)])
-    new_state.T1meas = np.array([new_state.Ta[line, -1] for line in range(3)])
-    new_state.Fmeasfilt = 0.9 * new_state.Fmeas + 0.1 * new_state.Fmeasfilt
-    return new_state
-
-
-def control_step(
-    state: "SimulationState", config: "SimulationConfig", dt: float
-) -> "SimulationState":
-    return copy.deepcopy(state)
-
-
-def evaluate_step(
-    state: "SimulationState", config: "SimulationConfig"
-) -> "SimulationState":
-    return copy.deepcopy(state)
-
-
-def record_history(state: "SimulationState") -> "SimulationState":
-    new_state = copy.deepcopy(state)
-    new_state.history["simtime"].append(new_state.simtime)
-    new_state.history["T1"].append(float(np.mean(new_state.Ta[:, -1])))
-    new_state.history["T2"].append(float(np.mean(new_state.Ta[:, -1])))
-    new_state.history["F_total"].append(float(new_state.Ftotal))
-    new_state.history["pump_speed"].append(float(new_state.spumps))
-    return new_state
 
 
 @dataclass
 class SimulationConfig:
+    """Physical and numerical configuration for the solar collector plant."""
+
     N: int = 20
     dz: float = 0.1
     R: float = 0.035
@@ -169,6 +233,8 @@ class SimulationConfig:
 
 @dataclass
 class SimulationState:
+    """Full mutable state snapshot (retained for test compatibility)."""
+
     simtime: float = 0.0
     spumps: float = 0.0
     spumpstarg: float = 0.0
@@ -206,74 +272,3 @@ class SimulationState:
             "pump_speed": [],
         }
     )
-
-
-class SolarCollectorSimulator:
-    def __init__(
-        self,
-        config: SimulationConfig,
-        rng: Optional[np.random.Generator] = None,
-    ):
-        self.config = config
-        self.state = SimulationState(
-            spumps=config.initial_spump,
-            spumpstarg=config.initial_spump,
-            valvex=np.full(3, 0.9),
-            valvextarg=np.full(3, 0.9),
-            F=np.full(3, 0.01),
-            Mdot=np.full(3, 0.01 * config.dens),
-            Tb=np.tile(
-                np.linspace(
-                    config.initial_Tin, config.initial_Tin + 95.0, config.N
-                ),
-                (3, 1),
-            ),
-            Ta=np.tile(
-                np.linspace(
-                    config.initial_Tin, config.initial_Tin + 95.0, config.N
-                ),
-                (3, 1),
-            ),
-            PipeT=np.tile(
-                np.linspace(
-                    config.initial_Tin + 40.0,
-                    config.initial_Tin + 135.0,
-                    config.N,
-                ),
-                (3, 1),
-            ),
-            eff1=np.full(3, config.eff),
-            epsilonest=np.full(3, config.eff),
-            valvexm=np.full(3, 0.9),
-            T2SP=np.full(
-                3,
-                config.initial_Tin
-                + (config.initial_T1SP - config.initial_Tin) / 2.0,
-            ),
-            T2model=np.full(
-                3,
-                config.initial_Tin
-                + (config.initial_T1SP - config.initial_Tin) / 2.0,
-            ),
-            Fmeasfilt=np.full(3, 0.01),
-            noise_seed=config.initial_spump,
-        )
-        self.rng = rng or np.random.default_rng(self.state.noise_seed)
-        self._initialize_state()
-
-    def _initialize_state(self):
-        self.state.F = self.state.Mdot / self.config.dens
-        self.state.Mdottotal = np.sum(self.state.Mdot)
-        self.state.Ftotal = np.sum(self.state.F)
-
-    def step(self, dt: Optional[float] = None):
-        dt = dt if dt is not None else self.config.dt
-        self.state.simtime += dt
-        self.state = process_step(self.state, self.config, dt)
-        self.state = measure_step(self.state, self.config, dt, self.rng)
-        self.state = control_step(self.state, self.config, dt)
-        self.state = evaluate_step(self.state, self.config)
-        self.state = record_history(self.state)
-
-    def set_spump_target(self, value: float):
-        self.state.spumpstarg = np.clip(value, 0.0, 1.0)
