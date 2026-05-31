@@ -98,13 +98,13 @@ class CasadiSolarCollectorModel:
             + [f"Mdot{i + 1}" for i in range(self.n_lines)]
             + [
                 f"Tb{i + 1}_{j + 1}"
-                for i in range(self.n_lines)
                 for j in range(self.N)
+                for i in range(self.n_lines)
             ]
             + [
                 f"PipeT{i + 1}_{j + 1}"
-                for i in range(self.n_lines)
                 for j in range(self.N)
+                for i in range(self.n_lines)
             ]
         )
         self.output_names = (

@@ -8,53 +8,88 @@
 - Added `tools/extract_vba.py` to extract VBA macros from the `.xlsm` workbook.
 - Installed `oletools` and `openpyxl` in the project venv.
 - Extracted macros from `excel/Solar Collect Model & Control 3 Lines T-T-F 2026-05-01 base case.xlsm` into `excel/macros/`:
-  - `Module1.vba`
-  - `Module2.vba`
-  - `Sheet1.vba`
-  - `Sheet2.vba`
-  - `ThisWorkbook.vba`
-  - `index.txt`
-- Inspected the workbook and found:
-  - `Main` sheet contains ~100 formula cells and ~22,760 value cells.
-  - `Analysis` sheet contains ~1,164 formula cells and ~1,827 value cells.
-- Reorganised source into a proper `src`-layout package at `src/solar_collector/`:
-  - `src/solar_collector/__init__.py`
-  - `src/solar_collector/model.py` — pure Python physics functions derived from `Module1.vba`
-  - `src/solar_collector/simulation.py` — `SimulationConfig`, `SimulationState`, `process_step`, and `SolarCollectorSimulator`
-  - `src/solar_collector/casadi_model.py` — `CasadiSolarCollectorModel`, a CasADi discrete-time state-space model
-- Fixed `pyproject.toml` to use `[tool.setuptools.packages.find] where = ["src"]` so the package is correctly discovered under the `src` layout.
-- Added `tests/test_data.yml` with workbook-derived regression inputs and expected outputs.
-- Added `tests/test_model.py`; fixed a path bug (`Path("tests")` → `Path(__file__).parent`, `yaml.safe_load(path)` → `yaml.safe_load(path.read_text())`).
-- Added `tests/test_casadi_model.py`; fixed CasADi 3.7 calling convention: a single-output `Function` returns its DM result directly, not wrapped in a list, so `model.F(...)[0]` and `model.H(...)[0]` were corrected to `model.F(...)` and `model.H(...)`.
-- Reviewed and rewrote `casadi_model.py` for correctness and CasADi idiom:
-  - Promoted `_casadi_rho` and `_casadi_hinside` to module-level functions (were buggy lambdas — the lambda keyword-argument defaults were silently overridden by hardcoded values in the body).
-  - Replaced `Tb[:, -1]` (unreliable negative indexing in CasADi) with `Tb[:, self.N - 1]`.
-  - Replaced SX item-assignment pattern (`Tb_new[line, :] = Ta_line`) with `cas.vertcat(*Tb_rows)`.
-  - Replaced hardcoded `F_lines[0] + F_lines[1] + F_lines[2]` with `cas.sum1(F_lines)`.
-  - Removed `sqrt=cas.sqrt` passed to `pump_head_and_dP` (that function does not use `sqrt`).
-  - Introduced `offset` variable in `_unpack_state` to eliminate repeated magic index expression.
-- Verified `13 passed` with pytest (11 model tests + 2 CasADi model tests).
+  - `Module1.vba`, `Module2.vba`, `Sheet1.vba`, `Sheet2.vba`, `ThisWorkbook.vba`, `index.txt`
+- Inspected the workbook:
+  - `Main` sheet: ~100 formula cells, ~22,760 value cells (simulation output), ~282 output rows at ~87 s intervals.
+  - `Analysis` sheet: ~1,164 formula cells, ~1,827 value cells (Monte Carlo trial results).
+- Reorganised source into `src/solar_collector/` package; fixed `pyproject.toml` for `src` layout.
+- Added `tests/test_data.yml`, `tests/test_model.py`, `tests/test_casadi_model.py` with regression tests.
+- Fixed CasADi 3.7 calling convention bugs in tests; rewrote `casadi_model.py` for correctness and CasADi idiom.
+- **Added CasADi Newton rootfinder** to `CasadiSolarCollectorModel` (`_build_flow_balance_solver`):
+  - Replaces the open-loop approximation that used the previous step's `Ftotal`.
+  - Replaces the VBA's 10-step successive-substitution loop for the pump/valve hydraulic balance.
+  - Finds `Ftotal*` such that `∑ F_i(valvex_i, ΔP_pump(Ftotal*, s)) = Ftotal*` at each step.
+  - CasADi's automatic differentiation provides the Newton Jacobian at no extra cost.
+- Updated `test_casadi_model.py`:
+  - Replaced the single comparison-against-`process_step` test with two focused tests.
+  - `test_casadi_model_step_pump_valve_dynamics`: validates pump/valve lag against pure Python.
+  - `test_casadi_model_hydraulic_balance`: verifies the rootfinder yields a self-consistent solution.
+  - 14 tests total, all passing.
+- Added full class docstring to `CasadiSolarCollectorModel` listing all state, input, and output variables with units.
+- **Documentation:**
+  - Added `docs/solar_collector_model.md` (replaces `docs/simulation_step_graph.md`): full LaTeX
+    equations with nomenclature table, covering fluid properties, heat transfer, valve characteristic,
+    pump curve, hydraulic balance rootfinder, actuator lags, pipe wall temperature, finite-volume
+    PDE, state-space summary, and simulation step sequence.
+  - Added `docs/excel_workbook.md`: comprehensive reference for both sheets and all VBA macros
+    (sub-routine descriptions, equations, design notes).
+  - Updated `README.md` with project purpose, objectives, repo layout, and documentation pointer.
+- Configured `.vscode/settings.json` for format-on-save using `ruff format` for Python files.
+- **Added `src/solar_collector/casadi_controllers.py`** — four CasADi discrete-time controllers,
+  all mirroring the `StateSpaceModelDT` interface:
+  - `ControllerConfig` — dataclass with defaults matching the base-case spreadsheet.
+  - `T1PIController` — primary PI exit-temperature controller; state: `Iterm[1..3]`;
+    output: `T2SP[1..3]`; anti-windup via back-calculated integral.
+  - `T2GMCController` — secondary GMC mid-line temperature controller; state: `GMCbias[1..3]`;
+    output: `Fdesired[1..3]`; bias updated with exponential filter on SS model–setpoint mismatch.
+  - `FMBCController` — tertiary model-based valve controller; state: `[valvexm[1..3], Fpmm[1..3]]`;
+    output: `valvextarg[1..3]`; inverts valve equation with flow mismatch correction.
+  - `PumpPIController` — auxiliary pump speed controller; state: `[pumpintegral]`;
+    output: `[spumpstarg]`; asymmetric gain (5× faster to speed up than slow down).
+- **Redesigned `src/solar_collector/simulation.py`**:
+  - Removed `SolarCollectorSimulator` class and old step functions (`process_step`,
+    `measure_step`, `control_step`, `evaluate_step`, `record_history`).
+  - Added `simulate(plant, controller, nT, nd, measurement_fn)`: builds and returns a CasADi
+    Function with signature `(t_eval, D, x0) → (X, Y)` for closed-loop n-step simulation.
+    `D` is the disturbance/exogenous input matrix; `x0` is the concatenated initial state
+    `[x_plant; x_ctrl]`; `X` and `Y` are the combined-state and plant-output trajectories.
+  - Added `make_open_loop_simulation(plant, nT)`: open-loop equivalent with signature
+    `(t_eval, U, x0) → (X, Y)`, matching `make_n_step_simulation_function_from_model` from
+    the `casadi-models` package.
+  - Kept `SimulationConfig` and `SimulationState` for backward compatibility with existing tests.
 
 ### Design notes
-- `model.py` injects all math operations (`exp`, `log`, `sqrt`, `min`, `max`, `pi`) as keyword arguments so the same physics functions run under NumPy (simulation) and CasADi (optimisation/control) without duplication.
-- `CasadiSolarCollectorModel` mirrors the attribute interface of `StateSpaceModelDT` in the `casadi-models` package (duck-type compatibility without a hard dependency).
-- `Module1.vba` is highly monolithic and stateful; it relies on module-level global arrays and many direct `Cells(...)` references.
-- The `Main` worksheet is not purely input/output; it contains formula-based helper calculations that contribute to the simulation configuration.
-- `Analysis` contains post-processing and reporting formulas, while `Module2.vba` is mainly sorting/copying results for reporting.
-- The VBA `hinside` function uses global `F(LineN)` state and `R`; refactored into an explicit function of line flow and geometry.
-- The `Process` routine uses successive substitution for the pump/line flow interaction; should become an explicit numerical solver or algebraic update.
-- Measurement and control logic in the VBA code depend on workbook option cells and manual/auto flags.
-- `Estimate_Coefficients` uses filtered estimates and model parameter updates; should be separated from the core physical model.
-- Several numeric magic constants are embedded in the VBA code and should be moved into named configuration fields.
+- `model.py` injects all math operations (`exp`, `log`, `sqrt`, `min`, `max`, `pi`) as keyword
+  arguments so the same physics functions run under both NumPy and CasADi without duplication.
+- `CasadiSolarCollectorModel` and all four controllers mirror the attribute interface of
+  `StateSpaceModelDT` in the `casadi-models` package (duck-type compatible, no hard dependency).
+- The four VBA controllers form a 4-level cascade: T1PI → T2GMC → FMBC → plant, with PumpPI
+  running in parallel to keep the most-open valve near 0.9.
+- The `simulate` function requires `controller.ny == plant.nu` (= 4 for this plant); individual
+  cascade controllers must be composed into a single combined controller before use.
+- The Excel workbook stores simulation output at ~87-second intervals (355 physics timesteps).
+  Stored data is insufficient for full `F(t, x, u)` validation because: (1) plant state is
+  partial (one of three lines, 10 of 100 segments, no PipeT); (2) control inputs are not stored
+  between snapshots; (3) stochastic disturbances are irreproducible. The hydraulic balance
+  (spumps + valvex[1..3] → Ftotal across 282 snapshots) is a feasible isolated validation target.
+- `PumpControl` in the VBA integrates using `dt` (physics timestep, ~0.246 s) rather than the
+  control interval (1 s). The Python `PumpPIController` uses `dt_ctrl` (the correct control
+  interval); tuning of `PumpPIGain` / `PumpPITau` may need adjustment to match VBA behaviour.
 
 ### Discrepancies / improvements still to address
-- `simulation.py` is a working first draft but is considered a placeholder — it will be redesigned.
-- Centralise sheet-to-parameter mapping.
-- Decouple physics from control.
-- Preserve units clearly and avoid hidden Excel-dependent state.
-- Expand tests to cover edge cases and boundary conditions.
-- `flowaest` (estimated line flow) is a state variable in `simulation.py` but is hardcoded to `0.0` in `CasadiSolarCollectorModel`; the numerical impact is negligible but the asymmetry should be resolved when the state vector is finalised.
+- `flowaest` is hardcoded to `0.0` in `CasadiSolarCollectorModel`; the numerical impact is
+  negligible at balanced conditions but the asymmetry should be resolved when the state vector
+  is finalised.
+- The simplified hydraulic equation in Python (`flowaest + 9·Flowb` denominator) differs from
+  the full VBA nonlinear form (`dPSys/F² + flowa1/F^0.1`); a direct hydraulic snapshot
+  validation against stored spreadsheet data would quantify the discrepancy.
+- Hydraulic balance validation against 282 stored spreadsheet snapshots not yet implemented.
+- Controller cascade composition into a single `StateSpaceModelDT`-compatible model not yet
+  implemented; needed before `simulate` can be used with the full cascade.
+- Gymnasium environment wrapper not yet started.
 
 ### Next actions
-- Redesign and rewrite `src/solar_collector/simulation.py` as the main simulation driver, based on the step sequence in `docs/simulation_step_graph.md`.
-- Build a Gymnasium environment wrapper around `SolarCollectorSimulator`.
+- Validate the hydraulic balance against stored spreadsheet snapshots.
+- Compose the cascade controllers into a single combined controller.
+- Write a `simulate` end-to-end test using the full cascade.
+- Build a Gymnasium environment wrapper.
