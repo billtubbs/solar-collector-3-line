@@ -112,3 +112,46 @@
 - Compose the cascade controllers into a single combined controller.
 - Write a `simulate` end-to-end test using the full cascade.
 - Build a Gymnasium environment wrapper.
+
+---
+
+## 2026-05-31
+
+### Completed
+
+- **Removed volumetric flow rates from the state vector** (`casadi_model.py`):
+  - `F1..3` eliminated; state is now `n = 1 + 2·n_lines + 2·n_lines·N` (was `1 + 3·n_lines + ...`).
+  - Hydraulic balance now initialised from `Mdot / dens` rather than the stored `F` values.
+  - Volumetric flow at any axial position can be recovered post-hoc as `F_i(k) = Mdot_i / rho(Tb_i_k)`.
+  - Updated `_unpack_state`, `_pack_state`, `_state_update`, and `_output_map` accordingly.
+  - Moved `plot_utils.py` → `src/plot_utils.py`.
+  - Updated `run_simulation_ol.py` and `tests/test_casadi_model.py` to match new state layout.
+
+- **Added disturbance inputs to model interface** (`casadi_model.py`):
+  - `Irad`, `Tamb`, and `Tin` promoted from hardcoded config fields to runtime inputs in the `u` vector.
+  - Input vector is now `nu = 1 + n_lines + 3`; `input_names` extended with `["Irad", "Tamb", "Tin"]`.
+  - `_unpack_input` now returns `spumpstarg, valvextarg, Irad, Tamb, Tin`.
+  - `_state_update` passes live `Irad`, `Tamb`, `Tin` to `thermal_line_step` each step.
+  - Output vector redesigned: `y = [Mdot1..3, Tb{i}_{k}]` (all mass flows then full temperature field); exit temperatures are the last-segment rows.
+  - Updated `run_simulation_ol.py` and tests to supply disturbances explicitly.
+
+- **Added real-time animated live simulation** (`src/solar_collector/live_sim.py`, `run_simulation_live.py`):
+  - `SolarCollectorLiveSim` class drives a `matplotlib.animation.FuncAnimation` loop.
+  - Each frame advances the plant by `steps_per_frame` CasADi steps, appends to rolling deque buffers, and redraws all artists.
+  - **Layout**: two spatial-profile subplots (fluid temperature and pipe-wall temperature vs axial position) and five scrolling time-series subplots (exit temperatures, mass flow rates, pump speed actual + target, solar irradiance, valve positions).
+  - **Interactive sliders**: pump speed target, valve 1–3 targets, `Irad`, `Tamb`, `Tin`; slider callbacks write directly to `self.u` so changes take effect on the next step.
+  - **Start/Stop button**: pauses/resumes `FuncAnimation`; label toggles between `"STOP"` and `"START"`.
+  - **Time counter**: monospace `"t = NNN.N s"` label updated every frame.
+  - `run_simulation_live.py`: entry-point script that builds `SimulationConfig` and `CasadiSolarCollectorModel`, initialises `x0` via the hydraulic Newton rootfinder, and calls `SolarCollectorLiveSim.run()`.
+
+- **Added Lagrangian flow-marker particles** to the spatial profile plots (`live_sim.py`):
+  - 10 tracer particles per line rendered as `"|"` tick marks on both the fluid-temperature and pipe-wall-temperature profiles.
+  - Particles advect each frame using the local fluid velocity `v = Mdot / (rho(Tb) · A_pipe)`, interpolated at each particle's axial position.
+  - Wrap-around at collector exit so particles re-enter at the inlet.
+  - Initial positions staggered by `1/n_lines` of the inter-marker spacing so markers from different lines don't coincide at `t = 0`.
+
+### Next actions
+- Validate the hydraulic balance against stored spreadsheet snapshots.
+- Compose the cascade controllers into a single combined controller.
+- Write a `simulate` end-to-end test using the full cascade.
+- Build a Gymnasium environment wrapper.

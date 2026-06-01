@@ -36,13 +36,23 @@ boiler.  The model captures:
 ## Repository layout
 
 ```
-src/solar_collector/
-    model.py          # pure-Python physics primitives (NumPy + CasADi compatible)
-    casadi_model.py   # CasadiSolarCollectorModel — discrete-time state-space model
-    simulation.py     # SimulationConfig, SimulationState, SolarCollectorSimulator
-excel/macros/         # VBA macros extracted from the original Excel workbook
-tests/                # pytest regression tests
-docs/                 # model description and design notes
+run_simulation_ol.py          # open-loop simulation script (pump step, saves results/)
+run_simulation_live.py        # real-time interactive animated simulation
+
+src/
+    plot_utils.py             # lightweight Matplotlib helpers (make_tsplots, make_ioplots)
+    solar_collector/
+        model.py              # pure-Python physics primitives (NumPy + CasADi compatible)
+        casadi_model.py       # CasadiSolarCollectorModel — discrete-time state-space model
+        casadi_ctrls.py       # four CasADi discrete-time cascade controllers
+        simulation.py         # SimulationConfig, simulate(), make_open_loop_simulation()
+        live_sim.py           # SolarCollectorLiveSim — real-time animated interactive UI
+
+excel/macros/                 # VBA macros extracted from the original Excel workbook
+results/                      # simulation output files (.npz / .csv)
+tests/                        # pytest regression tests
+docs/                         # model equations, nomenclature, and Excel workbook reference
+tools/                        # utility scripts (e.g. extract_vba.py)
 ```
 
 ## Quick setup
