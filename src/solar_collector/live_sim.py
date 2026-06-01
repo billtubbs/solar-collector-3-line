@@ -19,6 +19,8 @@ import matplotlib.widgets as mwidgets
 import numpy as np
 from matplotlib.animation import FuncAnimation
 
+from .model import rho as _rho
+
 _COLORS = ["tab:blue", "tab:orange", "tab:green"]
 _LINE_LABELS = ["Line 1", "Line 2", "Line 3"]
 
@@ -90,6 +92,17 @@ class SolarCollectorLiveSim:
         # Axial positions along the collector
         self.z = np.linspace(0, cfg.L, self.N)
 
+        # Flow-marker particles (Lagrangian tracers on spatial plots)
+        self._n_markers = 10
+        self._pipe_area = np.pi * cfg.R ** 2
+        # Stagger each line's particles by 1/n_lines of the inter-marker gap
+        # so markers from different lines don't all start at the same z.
+        spacing = cfg.L / self._n_markers
+        self._z_particles = np.array([
+            (np.arange(self._n_markers) + i / self.n_lines) * spacing % cfg.L
+            for i in range(self.n_lines)
+        ])
+
         # Rolling history buffers
         def _buf():
             return collections.deque(maxlen=history_len)
@@ -109,6 +122,8 @@ class SolarCollectorLiveSim:
         self._sliders = {}
         self._tb_lines = []
         self._pt_lines = []
+        self._tb_particle_markers = []
+        self._pt_particle_markers = []
         self._Texit_lines = []
         self._mdot_lines = []
         self._pump_act_line = None
@@ -136,6 +151,20 @@ class SolarCollectorLiveSim:
             self._pt_off + line : self._pt_off
             + self.n_lines * self.N : self.n_lines
         ]
+
+    # ── Particle tracking ──────────────────────────────────────────────────
+
+    def _advance_particles(self):
+        """Move Lagrangian tracer particles by one display frame."""
+        dt = self._dt * self.steps_per_frame
+        L = self.plant.config.L
+        mdot_off = 1 + self.n_lines  # state index of Mdot[0]
+        for i in range(self.n_lines):
+            tb = np.array(self._tb_profile(i))
+            mdot = float(self.x[mdot_off + i])
+            v_profile = mdot / (_rho(tb) * self._pipe_area)
+            v_at_p = np.interp(self._z_particles[i], self.z, v_profile)
+            self._z_particles[i] = (self._z_particles[i] + v_at_p * dt) % L
 
     # ── Simulation ─────────────────────────────────────────────────────────
 
@@ -210,6 +239,10 @@ class SolarCollectorLiveSim:
             for i in range(self.n_lines)
         ]
         ax_tb.legend(loc="upper left", fontsize=8)
+        self._tb_particle_markers = [
+            ax_tb.plot([], [], "|", color=_COLORS[i], ms=10, mew=1.5, zorder=5)[0]
+            for i in range(self.n_lines)
+        ]
 
         # ── Spatial: pipe wall temperatures ───────────────────────────────
         ax_pt.set(
@@ -231,6 +264,10 @@ class SolarCollectorLiveSim:
             for i in range(self.n_lines)
         ]
         ax_pt.legend(loc="upper left", fontsize=8)
+        self._pt_particle_markers = [
+            ax_pt.plot([], [], "|", color=_COLORS[i], ms=10, mew=1.5, zorder=5)[0]
+            for i in range(self.n_lines)
+        ]
 
         # ── Time series: exit fluid temperatures ──────────────────────────
         ax_Texit.set(
@@ -391,7 +428,11 @@ class SolarCollectorLiveSim:
         )
 
     def _all_artists(self):
-        return self._tb_lines + self._pt_lines + self._all_ts_lines()
+        return (
+            self._tb_lines + self._tb_particle_markers
+            + self._pt_lines + self._pt_particle_markers
+            + self._all_ts_lines()
+        )
 
     def _init_anim(self):
         for line in self._all_ts_lines():
@@ -405,9 +446,15 @@ class SolarCollectorLiveSim:
         self._time_text.set_text(f"t = {self.t:6.1f} s")
 
         # Spatial profiles — copy avoids stale-view issue when self.x is replaced
+        self._advance_particles()
         for i in range(self.n_lines):
-            self._tb_lines[i].set_data(self.z, np.array(self._tb_profile(i)))
-            self._pt_lines[i].set_data(self.z, np.array(self._pt_profile(i)))
+            tb = np.array(self._tb_profile(i))
+            pt = np.array(self._pt_profile(i))
+            self._tb_lines[i].set_data(self.z, tb)
+            self._pt_lines[i].set_data(self.z, pt)
+            zp = self._z_particles[i]
+            self._tb_particle_markers[i].set_data(zp, np.interp(zp, self.z, tb))
+            self._pt_particle_markers[i].set_data(zp, np.interp(zp, self.z, pt))
 
         if len(self._t_buf) < 2:
             return self._all_artists()
