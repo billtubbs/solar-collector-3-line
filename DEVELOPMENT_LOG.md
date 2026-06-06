@@ -155,3 +155,56 @@
 - Compose the cascade controllers into a single combined controller.
 - Write a `simulate` end-to-end test using the full cascade.
 - Build a Gymnasium environment wrapper.
+
+---
+
+## 2026-06-06
+
+### Completed
+
+- **Refactored live simulation layout** (`live_sim.py`):
+  - Resized figure from 12×11 to 16×8 (landscape format for widescreen display).
+  - Reorganised `GridSpec` from 4 rows × 3 columns to 2 rows × 4 columns with `height_ratios=[1.8, 1.0]`.
+  - Merged the two separate spatial-profile subplots (fluid `ax_tb` and pipe-wall `ax_pt`) into a single combined subplot (`ax_profile`): fluid lines solid, pipe-wall lines dashed on the same axes.
+  - Removed pipe-wall Lagrangian flow markers (`_pt_particle_markers`); flow markers now appear on the fluid temperature profile only.
+  - Reorganised the bottom time-series row into four equal columns: irradiance | valve positions | pump speed | line flow rates.
+  - Renamed "Exit fluid temperatures" → "Fluid inlet and exit temperatures" (subplot already included `Tin`).
+  - Renamed "Mass flow rates" → "Line flow rates".
+  - Added layout diagram to module docstring.
+  - Simplified `_build_sliders` signature (removed unused `slider_zone` parameter).
+
+- **Minor model.py tidying** (`model.py`):
+  - Grouped `DEFAULT_PI` and `ZERO_CELSIUS` at the top of the file under a *Universal constants* comment.
+  - Added a comment clarifying that `DEFAULT_*` math-function variables allow the same physics code to run under both NumPy and CasADi.
+
+- **Live simulation plot refinements** (`live_sim.py`):
+  - Reduced pipe-wall temperature profile line width from 1.5 to 1.0 so dashed lines are less visually dominant.
+  - Reduced flow marker height and line width (ms: 10 → 7, mew: 1.5 → 1.0).
+  - Reduced vertical spacing between plot rows (hspace: 0.55 → 0.35).
+  - Synchronised y-axis range of both temperature subplots: fixed maximum 450 °C, auto minimum 5 °C below the lowest data point in either plot; updated on every animation frame.
+  - Added a 400 °C maximum temperature limit as a dark-grey dashed horizontal line to both temperature subplots, with a legend entry "T max (400°C)".
+  - Swapped pump speed and valve positions subplots (pump now column 1, valve now column 2 in the bottom row).
+  - Coloured valve sliders to match their per-line plot colours (tab:blue / tab:orange / tab:green): both the slider bar fill and the label text are coloured and bold.
+
+- **Added `make_initial_state` helper** (`model.py`):
+  - `make_initial_state(plant, T_init, spump=0.0, valvex=0.1, Mdot=0.0)` constructs a uniform initial state vector; all fluid and pipe-wall segments set to `T_init`, actuator states from the remaining parameters.
+  - Simplifies `run_simulation_live.py` x0 construction from ~20 lines (linear ramp + hydraulic solve) to a single call.
+
+- **Ambient cold-start initial conditions** (`run_simulation_live.py`):
+  - Default start changed to all temperatures at `cfg.Tamb`, pump and valves at their minimums, irradiance zero (pre-sunrise).
+
+- **Named actuator limits** (`live_sim.py`):
+  - Added module-level constants `_PUMP_MIN = 0.3`, `_PUMP_MAX = 1.0`, `_VALVE_MIN = 0.1`, `_VALVE_MAX = 1.0`; wired into slider specs so the slider range and initial conditions share a single source of truth.
+  - `run_simulation_live.py` imports `_PUMP_MIN` / `_VALVE_MIN` directly so startup state matches slider floor.
+
+- **Fixed NaN in hydraulic solver at low pump speed** (`model.py`, `casadi_model.py`):
+  - `pump_head_and_dP`: added `max=DEFAULT_MAX` parameter; denominator `Fmax` is now clamped to `max(Fmax, 1e-10)` before dividing, eliminating the `0/0 → NaN` when `spumps ≈ 0`. Both CasADi call sites updated to pass `max=_casadi_max`.
+
+### Discrepancies to investigate
+- **Pump speed minimum discrepancy**: VBA (`Module1.vba` line 218) clips `spumpstarg ≥ 0.3`; valve minimum in VBA is 0.1 (lines 363–364, 388, 515). The Python `_PUMP_MIN = 0.3` has been set to match the VBA. The original reason for the 0.3 floor (vs a lower value like 0.1) is not documented in the VBA — **to be clarified with the workbook author**.
+
+### Next actions
+- Validate the hydraulic balance against stored spreadsheet snapshots.
+- Compose the cascade controllers into a single combined controller.
+- Write a `simulate` end-to-end test using the full cascade.
+- Build a Gymnasium environment wrapper.

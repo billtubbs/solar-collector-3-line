@@ -148,7 +148,7 @@ class CasadiSolarCollectorModel:
         spumps_p = p[0]
         valvex_p = p[1:]
         _, dPpump = pump_head_and_dP(
-            z, spumps_p, self.config.dens, min=_casadi_min
+            z, spumps_p, self.config.dens, min=_casadi_min, max=_casadi_max
         )
         F_computed = cas.sum1(
             cas.vertcat(
@@ -219,7 +219,7 @@ class CasadiSolarCollectorModel:
         Ftotal_sol = self.flow_balance(Ftotal_init, p_bal)[0]
 
         _, dPpump = pump_head_and_dP(
-            Ftotal_sol, spumps_new, self.config.dens, min=_casadi_min
+            Ftotal_sol, spumps_new, self.config.dens, min=_casadi_min, max=_casadi_max
         )
 
         F_lines_new = cas.vertcat(

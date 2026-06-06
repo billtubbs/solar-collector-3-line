@@ -13,13 +13,20 @@ Usage:
 import numpy as np
 
 from solar_collector.casadi_model import CasadiSolarCollectorModel
-from solar_collector.live_sim import SolarCollectorLiveSim
+from solar_collector.live_sim import (
+    SolarCollectorLiveSim,
+    _PUMP_MIN,
+    _VALVE_MIN,
+)
+from solar_collector.model import make_initial_state
 from solar_collector.simulation import SimulationConfig
 
 # ── Simulation parameters ──────────────────────────────────────────────────
 
-SPUMP_INIT = 0.45  # initial pump speed
-IRAD_INIT = 0.95  # [kW/m²] initial solar irradiance
+# Initial conditions: ambient cold-start (actuators at minimum, no irradiance)
+SPUMP_INIT = _PUMP_MIN  # minimum pump speed
+VALVE_INIT = _VALVE_MIN  # minimum valve position
+IRAD_INIT = 0.0  # no irradiance (pre-sunrise)
 STEPS_PER_FRAME = 1  # simulation steps per animation frame
 HISTORY_LEN = 600  # time points kept in scrolling plots (~148 s at dt=0.246)
 FRAME_INTERVAL_MS = 50  # target ms between frames (≈ 20 fps ceiling)
@@ -57,40 +64,23 @@ print(
     f"nu = {plant.nu}  ny = {plant.ny}"
 )
 
-# ── Initial state ──────────────────────────────────────────────────────────
-# Tb: linear ramp 300 → 395 °C along each line (VBA Initialize)
-# PipeT: linear ramp 354 → 449 °C (~54 °C above fluid)
-# Mdot: consistent with hydraulic balance at initial pump/valve conditions
+# ── Initial state and inputs: ambient cold-start ───────────────────────────
+# All temperatures set to Tamb; pump off, valves at minimum, no irradiance.
 
-N = cfg.N
-n_lines = plant.n_lines
-n = plant.n
-
-# Hydraulic-balance Mdot for initial conditions
-p_init = np.array([SPUMP_INIT, 0.9, 0.9, 0.9])
-Ftotal_ss = float(plant.flow_balance(3 * 0.003, p_init)[0])
-mdot_init = cfg.dens * Ftotal_ss / n_lines
-
-x0 = np.zeros(n)
-x0[0] = SPUMP_INIT
-x0[1:4] = 0.9
-x0[4:7] = mdot_init
-
-tb_off = 1 + 2 * n_lines
-pipe_off = tb_off + n_lines * N
-Tb_profile = 300.0 + 95.0 * np.arange(1, N + 1) / N
-PipeT_profile = 354.0 + 95.0 * np.arange(1, N + 1) / N
-x0[tb_off : tb_off + n_lines * N] = np.tile(Tb_profile, (n_lines, 1)).flatten(
-    order="F"
+x0 = make_initial_state(
+    plant, T_init=cfg.Tamb, spump=SPUMP_INIT, valvex=VALVE_INIT
 )
-x0[pipe_off : pipe_off + n_lines * N] = np.tile(
-    PipeT_profile, (n_lines, 1)
-).flatten(order="F")
-
-# ── Initial input vector ───────────────────────────────────────────────────
 
 u0 = np.array(
-    [SPUMP_INIT, 0.9, 0.9, 0.9, IRAD_INIT, cfg.Tamb, cfg.initial_Tin]
+    [
+        SPUMP_INIT,
+        VALVE_INIT,
+        VALVE_INIT,
+        VALVE_INIT,
+        IRAD_INIT,
+        cfg.Tamb,
+        cfg.Tamb,
+    ]
 )
 
 # ── Run live simulation ────────────────────────────────────────────────────

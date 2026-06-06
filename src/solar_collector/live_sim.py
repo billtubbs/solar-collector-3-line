@@ -1,8 +1,13 @@
 """Live animated simulation of the 3-line parabolic solar collector.
 
-Displays two spatial profile plots (fluid and pipe-wall temperatures vs
-axial position) and five scrolling time-series plots, with sliders to
+Displays a combined spatial profile plot (fluid and pipe-wall temperatures
+vs axial position) and four scrolling time-series plots, with sliders to
 adjust manipulated variables and disturbance inputs in real time.
+
+Layout: 2 plot rows × 4 columns.
+  Row 0: [combined temp profiles | exit/inlet temperatures]
+  Row 1: [irradiance | pump speed | valve positions | flow rates]
+  Row 2: sliders
 
 Usage (from a run script)::
 
@@ -23,6 +28,12 @@ from .model import rho as _rho
 
 _COLORS = ["tab:blue", "tab:orange", "tab:green"]
 _LINE_LABELS = ["Line 1", "Line 2", "Line 3"]
+
+# Actuator range limits — sourced from VBA controller clips (Module1.vba lines 217-218, 363-364)
+_PUMP_MIN = 0.3  # spumpstarg clipped to [0.3, 1.0] in VBA
+_PUMP_MAX = 1.0
+_VALVE_MIN = 0.1  # valvextarg / valvex clipped to [0.1, 1.0] in VBA and valve_state_update
+_VALVE_MAX = 1.0
 
 
 class SolarCollectorLiveSim:
@@ -94,14 +105,18 @@ class SolarCollectorLiveSim:
 
         # Flow-marker particles (Lagrangian tracers on spatial plots)
         self._n_markers = 10
-        self._pipe_area = np.pi * cfg.R ** 2
+        self._pipe_area = np.pi * cfg.R**2
         # Stagger each line's particles by 1/n_lines of the inter-marker gap
         # so markers from different lines don't all start at the same z.
         spacing = cfg.L / self._n_markers
-        self._z_particles = np.array([
-            (np.arange(self._n_markers) + i / self.n_lines) * spacing % cfg.L
-            for i in range(self.n_lines)
-        ])
+        self._z_particles = np.array(
+            [
+                (np.arange(self._n_markers) + i / self.n_lines)
+                * spacing
+                % cfg.L
+                for i in range(self.n_lines)
+            ]
+        )
 
         # Rolling history buffers
         def _buf():
@@ -118,12 +133,12 @@ class SolarCollectorLiveSim:
 
         # Matplotlib objects populated by _build_figure
         self._fig = None
+        self._ax_profile = None
         self._anim = None
         self._sliders = {}
         self._tb_lines = []
         self._pt_lines = []
         self._tb_particle_markers = []
-        self._pt_particle_markers = []
         self._Texit_lines = []
         self._mdot_lines = []
         self._pump_act_line = None
@@ -188,7 +203,7 @@ class SolarCollectorLiveSim:
     # ── Figure construction ────────────────────────────────────────────────
 
     def _build_figure(self) -> plt.Figure:
-        fig = plt.figure(figsize=(12, 11))
+        fig = plt.figure(figsize=(16, 8))
         try:
             fig.canvas.manager.set_window_title(
                 "Solar Collector — Live Simulation"
@@ -199,37 +214,45 @@ class SolarCollectorLiveSim:
         slider_zone = 0.20  # fraction of figure height reserved for sliders
 
         gs = mgridspec.GridSpec(
+            2,
             4,
-            3,
             figure=fig,
-            top=0.965,
+            top=0.960,
             bottom=slider_zone + 0.02,
-            hspace=0.65,
-            wspace=0.38,
+            hspace=0.35,
+            wspace=0.40,
+            height_ratios=[1.8, 1.0],
         )
 
-        ax_tb = fig.add_subplot(gs[0, :])  # fluid temperature profiles
-        ax_pt = fig.add_subplot(gs[1, :])  # pipe wall temperature profiles
-        ax_Texit = fig.add_subplot(gs[2, 0])
-        ax_mdot = fig.add_subplot(gs[2, 1])
-        ax_pump = fig.add_subplot(gs[2, 2])
-        ax_irad = fig.add_subplot(gs[3, 0])
-        ax_valve = fig.add_subplot(gs[3, 1:])
+        ax_profile = fig.add_subplot(gs[0, 0:2])  # combined temp profiles
+        ax_Texit = fig.add_subplot(gs[0, 2:4])  # exit / inlet temperatures
+        ax_irad = fig.add_subplot(gs[1, 0])
+        ax_pump = fig.add_subplot(gs[1, 1])
+        ax_valve = fig.add_subplot(gs[1, 2])
+        ax_mdot = fig.add_subplot(gs[1, 3])
 
-        self._ts_axes = [ax_Texit, ax_mdot, ax_pump, ax_irad, ax_valve]
+        self._ax_profile = ax_profile
+        self._ts_axes = [ax_Texit, ax_irad, ax_pump, ax_valve, ax_mdot]
         cfg = self.plant.config
 
-        # ── Spatial: fluid temperatures ───────────────────────────────────
-        ax_tb.set(
+        # Compute initial shared y-range for both temperature plots
+        all_init_t = [np.min(self._tb_profile(i)) for i in range(self.n_lines)]
+        all_init_t += [
+            np.min(self._pt_profile(i)) for i in range(self.n_lines)
+        ]
+        init_ymin = min(all_init_t) - 5
+
+        # ── Spatial: fluid (solid) + pipe wall (dashed) temperatures ─────
+        ax_profile.set(
             xlim=(0, cfg.L),
-            ylim=(270, 450),
+            ylim=(init_ymin, 450),
             xlabel="Position (m)",
-            ylabel="T_fluid (°C)",
-            title="Fluid temperature profiles",
+            ylabel="Temperature (°C)",
+            title="Temperature profiles — solid: fluid,  dashed: pipe wall",
         )
-        ax_tb.grid(True, alpha=0.3)
+        ax_profile.grid(True, alpha=0.3)
         self._tb_lines = [
-            ax_tb.plot(
+            ax_profile.plot(
                 self.z,
                 self._tb_profile(i),
                 color=_COLORS[i],
@@ -238,43 +261,41 @@ class SolarCollectorLiveSim:
             )[0]
             for i in range(self.n_lines)
         ]
-        ax_tb.legend(loc="upper left", fontsize=8)
-        self._tb_particle_markers = [
-            ax_tb.plot([], [], "|", color=_COLORS[i], ms=10, mew=1.5, zorder=5)[0]
-            for i in range(self.n_lines)
-        ]
-
-        # ── Spatial: pipe wall temperatures ───────────────────────────────
-        ax_pt.set(
-            xlim=(0, cfg.L),
-            ylim=(270, 500),
-            xlabel="Position (m)",
-            ylabel="T_pipe (°C)",
-            title="Pipe wall temperature profiles",
-        )
-        ax_pt.grid(True, alpha=0.3)
         self._pt_lines = [
-            ax_pt.plot(
+            ax_profile.plot(
                 self.z,
                 self._pt_profile(i),
                 color=_COLORS[i],
-                lw=1.5,
-                label=_LINE_LABELS[i],
+                lw=1.0,
+                ls="--",
             )[0]
             for i in range(self.n_lines)
         ]
-        ax_pt.legend(loc="upper left", fontsize=8)
-        self._pt_particle_markers = [
-            ax_pt.plot([], [], "|", color=_COLORS[i], ms=10, mew=1.5, zorder=5)[0]
+        ax_profile.axhline(
+            400, color="#444444", ls="--", lw=1.0, zorder=2, label="T max"
+        )
+        ax_profile.legend(loc="upper left", fontsize=8)
+        self._tb_particle_markers = [
+            ax_profile.plot(
+                [], [], "|", color=_COLORS[i], ms=7, mew=1.0, zorder=5
+            )[0]
             for i in range(self.n_lines)
         ]
 
-        # ── Time series: exit fluid temperatures ──────────────────────────
+        # ── Time series: exit / inlet fluid temperatures ──────────────────
         ax_Texit.set(
-            ylim=(270, 450),
+            ylim=(init_ymin, 450),
             xlabel="Time (s)",
-            ylabel="T_exit (°C)",
-            title="Exit fluid temperatures",
+            ylabel="Temperature (°C)",
+            title="Fluid inlet and exit temperatures",
+        )
+        ax_Texit.axhline(
+            400,
+            color="#444444",
+            ls="--",
+            lw=1.0,
+            zorder=2,
+            label="T max (400°C)",
         )
         ax_Texit.grid(True, alpha=0.3)
         self._Texit_lines = [
@@ -287,38 +308,6 @@ class SolarCollectorLiveSim:
             [], [], color="gray", lw=1.2, ls="--", label="Tin"
         )
         ax_Texit.legend(loc="upper left", fontsize=7)
-
-        # ── Time series: mass flow rates ──────────────────────────────────
-        ax_mdot.set(
-            ylim=(0, 5),
-            xlabel="Time (s)",
-            ylabel="Mdot (kg/s)",
-            title="Mass flow rates",
-        )
-        ax_mdot.grid(True, alpha=0.3)
-        self._mdot_lines = [
-            ax_mdot.plot(
-                [], [], color=_COLORS[i], lw=1.2, label=_LINE_LABELS[i]
-            )[0]
-            for i in range(self.n_lines)
-        ]
-        ax_mdot.legend(loc="upper left", fontsize=7)
-
-        # ── Time series: pump speed ───────────────────────────────────────
-        ax_pump.set(
-            ylim=(0, 1.05),
-            xlabel="Time (s)",
-            ylabel="Speed",
-            title="Pump speed",
-        )
-        ax_pump.grid(True, alpha=0.3)
-        (self._pump_targ_line,) = ax_pump.plot(
-            [], [], "k--", lw=1.2, label="target"
-        )
-        (self._pump_act_line,) = ax_pump.plot(
-            [], [], color="tab:red", lw=1.2, label="actual"
-        )
-        ax_pump.legend(loc="upper left", fontsize=7)
 
         # ── Time series: solar irradiance ─────────────────────────────────
         ax_irad.set(
@@ -346,17 +335,51 @@ class SolarCollectorLiveSim:
         ]
         ax_valve.legend(loc="upper left", fontsize=7)
 
+        # ── Time series: pump speed ───────────────────────────────────────
+        ax_pump.set(
+            ylim=(0, 1.05),
+            xlabel="Time (s)",
+            ylabel="Speed",
+            title="Pump speed",
+        )
+        ax_pump.grid(True, alpha=0.3)
+        (self._pump_targ_line,) = ax_pump.plot(
+            [], [], "k--", lw=1.2, label="target"
+        )
+        (self._pump_act_line,) = ax_pump.plot(
+            [], [], color="tab:red", lw=1.2, label="actual"
+        )
+        ax_pump.legend(loc="upper left", fontsize=7)
+
+        # ── Time series: mass flow rates ──────────────────────────────────
+        ax_mdot.set(
+            ylim=(0, 5),
+            xlabel="Time (s)",
+            ylabel="Mdot (kg/s)",
+            title="Line flow rates",
+        )
+        ax_mdot.grid(True, alpha=0.3)
+        self._mdot_lines = [
+            ax_mdot.plot(
+                [], [], color=_COLORS[i], lw=1.2, label=_LINE_LABELS[i]
+            )[0]
+            for i in range(self.n_lines)
+        ]
+        ax_mdot.legend(loc="upper left", fontsize=7)
+
         # ── Sliders ───────────────────────────────────────────────────────
-        self._build_sliders(fig, slider_zone)
+        self._build_sliders(fig)
 
         self._fig = fig
         return fig
 
-    def _build_sliders(self, fig: plt.Figure, slider_zone: float):
+    def _build_sliders(self, fig: plt.Figure):
         """Add sliders in two columns in the reserved bottom area.
 
         Left column  (col 0): Irad, Tamb, Tin  (rows 3→1, row 0 empty)
         Right column (col 1): Pump target, Valve 1, Valve 2, Valve 3  (rows 3→0)
+
+        Valve sliders are coloured to match the per-line colours used in plots.
         """
         sl_h = 0.025
         row_gap = 0.040  # tight vertical pitch between rows
@@ -366,24 +389,37 @@ class SolarCollectorLiveSim:
         # row_bottom[r] = figure y-coordinate of slider bottom for row r
         row_bottom = {r: 0.01 + r * row_gap for r in range(4)}
 
-        # (key, label, vmin, vmax, u_index, row, col)
+        # (key, label, vmin, vmax, u_index, row, col, color)
         specs = [
-            ("Irad", "Irad (kW/m²)", 0.0, 1.2, self._u_idx["Irad"], 3, 0),
-            ("Tamb", "Tamb (°C)", 0.0, 50.0, self._u_idx["Tamb"], 2, 0),
-            ("Tin", "Tin (°C)", 200.0, 400.0, self._u_idx["Tin"], 1, 0),
-            ("spump", "Pump target", 0.1, 1.0, 0, 3, 1),
-            ("v1", "Valve 1", 0.1, 1.0, 1, 2, 1),
-            ("v2", "Valve 2", 0.1, 1.0, 2, 1, 1),
-            ("v3", "Valve 3", 0.1, 1.0, 3, 0, 1),
+            (
+                "Irad",
+                "Irad (kW/m²)",
+                0.0,
+                1.2,
+                self._u_idx["Irad"],
+                3,
+                0,
+                None,
+            ),
+            ("Tamb", "Tamb (°C)", 0.0, 50.0, self._u_idx["Tamb"], 2, 0, None),
+            ("Tin", "Tin (°C)", 200.0, 400.0, self._u_idx["Tin"], 1, 0, None),
+            ("spump", "Pump target", _PUMP_MIN, _PUMP_MAX, 0, 3, 1, None),
+            ("v1", "Valve 1", _VALVE_MIN, _VALVE_MAX, 1, 2, 1, _COLORS[0]),
+            ("v2", "Valve 2", _VALVE_MIN, _VALVE_MAX, 2, 1, 1, _COLORS[1]),
+            ("v3", "Valve 3", _VALVE_MIN, _VALVE_MAX, 3, 0, 1, _COLORS[2]),
         ]
 
         self._sliders = {}
-        for key, label, vmin, vmax, u_idx, row, col in specs:
+        for key, label, vmin, vmax, u_idx, row, col, color in specs:
             left_x = col0_left if col == 0 else col1_left
             ax = fig.add_axes([left_x, row_bottom[row], col_w, sl_h])
-            sl = mwidgets.Slider(
-                ax, label, vmin, vmax, valinit=float(self.u[u_idx])
-            )
+            kwargs = {"valinit": float(self.u[u_idx])}
+            if color is not None:
+                kwargs["color"] = color
+            sl = mwidgets.Slider(ax, label, vmin, vmax, **kwargs)
+            if color is not None:
+                sl.label.set_color(color)
+                sl.label.set_fontweight("bold")
 
             def _cb(val, idx=u_idx):
                 self.u[idx] = val
@@ -396,9 +432,14 @@ class SolarCollectorLiveSim:
         btn_x = col0_left + col_w - btn_w
         time_y = row_bottom[0] + sl_h / 2
         self._time_text = fig.text(
-            col0_left, time_y, "t =    0.0 s",
-            va="center", ha="left", fontsize=9,
-            fontweight="bold", fontfamily="monospace",
+            col0_left,
+            time_y,
+            "t =    0.0 s",
+            va="center",
+            ha="left",
+            fontsize=9,
+            fontweight="bold",
+            fontfamily="monospace",
         )
         ax_btn = fig.add_axes([btn_x, row_bottom[0], btn_w, sl_h])
         self._btn = mwidgets.Button(ax_btn, "STOP")
@@ -429,8 +470,9 @@ class SolarCollectorLiveSim:
 
     def _all_artists(self):
         return (
-            self._tb_lines + self._tb_particle_markers
-            + self._pt_lines + self._pt_particle_markers
+            self._tb_lines
+            + self._tb_particle_markers
+            + self._pt_lines
             + self._all_ts_lines()
         )
 
@@ -447,16 +489,23 @@ class SolarCollectorLiveSim:
 
         # Spatial profiles — copy avoids stale-view issue when self.x is replaced
         self._advance_particles()
+        t_data_mins = []
         for i in range(self.n_lines):
             tb = np.array(self._tb_profile(i))
             pt = np.array(self._pt_profile(i))
             self._tb_lines[i].set_data(self.z, tb)
             self._pt_lines[i].set_data(self.z, pt)
             zp = self._z_particles[i]
-            self._tb_particle_markers[i].set_data(zp, np.interp(zp, self.z, tb))
-            self._pt_particle_markers[i].set_data(zp, np.interp(zp, self.z, pt))
+            self._tb_particle_markers[i].set_data(
+                zp, np.interp(zp, self.z, tb)
+            )
+            t_data_mins.append(float(tb.min()))
+            t_data_mins.append(float(pt.min()))
 
         if len(self._t_buf) < 2:
+            y_min = min(t_data_mins) - 5
+            self._ax_profile.set_ylim(y_min, 450)
+            self._ts_axes[0].set_ylim(y_min, 450)
             return self._all_artists()
 
         t_arr = np.array(self._t_buf)
@@ -483,6 +532,13 @@ class SolarCollectorLiveSim:
         self._pump_act_line.set_data(t_arr, spumps_arr)
         self._pump_targ_line.set_data(t_arr, sptarg_arr)
         self._irad_line.set_data(t_arr, irad_arr)
+
+        # Shared y-range for both temperature plots: auto min, fixed max 450
+        t_data_mins.append(float(T_exit_arr.min()))
+        t_data_mins.append(float(tin_arr.min()))
+        y_min = min(t_data_mins) - 5
+        self._ax_profile.set_ylim(y_min, 450)
+        self._ts_axes[0].set_ylim(y_min, 450)
 
         return self._all_artists()
 

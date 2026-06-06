@@ -1,15 +1,19 @@
 import numpy as np
 
+# Universal constants
+DEFAULT_PI = 3.14159
+ZERO_CELSIUS = 273.15
+
+# By default, calculations will use these NumPy functions but they can be
+# overridden by passing alternative functions as arguments
 DEFAULT_EXP = np.exp
 DEFAULT_LOG = np.log
 DEFAULT_SQRT = np.sqrt
 DEFAULT_SIN = np.sin
-DEFAULT_PI = 3.14159
 DEFAULT_MIN = np.minimum
 DEFAULT_MAX = np.maximum
 DEFAULT_CLIP = np.clip
 DEFAULT_WHERE = np.where
-ZERO_CELSIUS = 273.15
 
 
 def clamp_temperature(
@@ -107,6 +111,7 @@ def pump_head_and_dP(
     Fmaxref=224.6293 / 3600.0,
     sqrt=DEFAULT_SQRT,
     min=DEFAULT_MIN,
+    max=DEFAULT_MAX,
 ):
     """Calculate pump maximum flow and pump pressure drop for a given speed."""
     speed = spumps * sref
@@ -114,7 +119,9 @@ def pump_head_and_dP(
     hmaxref = 128.0 * dens * 9.807 / 1000.0
     hmax = hmaxref * (speed / sref) ** 2
     Ftotal_limited = min(Ftotal, Fmax)
-    dPpump = hmax * (1.0 - (Ftotal_limited / Fmax) ** 4.346734)
+    # Clamp denominator to avoid 0/0 when pump is off (spumps=0 → Fmax=0).
+    # hmax is also 0 in that case so dPpump correctly evaluates to 0.
+    dPpump = hmax * (1.0 - (Ftotal_limited / max(Fmax, 1e-10)) ** 4.346734)
     return Fmax, dPpump
 
 
@@ -147,6 +154,50 @@ def steady_state_exit_temperature(
     return Tin + (Iradmeas * MirrorWidth * epsilon * (L / 2.0)) / (
         F_line * dens * Cp
     )
+
+
+def make_initial_state(
+    plant,
+    T_init: float,
+    spump: float = 0.0,
+    valvex: float = 0.1,
+    Mdot: float = 0.0,
+) -> np.ndarray:
+    """Construct a uniform initial state vector for the plant.
+
+    All fluid and pipe-wall temperature segments are set to ``T_init``.
+    Suitable for a cold ambient startup (defaults: pump off, valves at
+    minimum, no flow) or any operating-point initialisation.
+
+    Parameters
+    ----------
+    plant :
+        Model instance exposing ``n``, ``n_lines``, and ``N``.
+    T_init : float
+        Initial temperature (°C) applied to every fluid and pipe-wall segment.
+    spump : float
+        Initial pump speed (0–1).  Default 0.0.
+    valvex : float or array-like of length n_lines
+        Initial valve position(s) (0.1–1.0).  Default 0.1 (minimum).
+    Mdot : float or array-like of length n_lines
+        Initial mass flow rate(s) (kg/s).  Default 0.0.
+
+    Returns
+    -------
+    x0 : np.ndarray, shape (plant.n,)
+    """
+    n_lines = plant.n_lines
+    N = plant.N
+    tb_off = 1 + 2 * n_lines
+    pipe_off = tb_off + n_lines * N
+
+    x0 = np.zeros(plant.n)
+    x0[0] = spump
+    x0[1 : 1 + n_lines] = valvex
+    x0[1 + n_lines : 1 + 2 * n_lines] = Mdot
+    x0[tb_off:pipe_off] = T_init
+    x0[pipe_off:] = T_init
+    return x0
 
 
 def stochastic_disturbance(
