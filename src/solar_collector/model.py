@@ -147,6 +147,27 @@ def pump_speed_update(spumpstarg, spumps, dt, pumptau, exp=DEFAULT_EXP):
     ) * spumps
 
 
+def line_pressure_balance_residual(F_line, Ftotal, fofx, Cv, G, Flowa, Flowb, dPpump):
+    """Per-line hydraulic pressure balance residual (VBA Module1.vba line 540).
+
+    Evaluates: dP_valve + dP_line + dP_system - dP_pump
+
+    Where:
+      dP_valve  = G * (F_line / (Cv * fofx))^2   valve and minor losses
+      dP_line   = Flowa * F_line^1.9              per-line pipe friction
+      dP_system = Flowb * Ftotal^1.9              common system (boiler, headers)
+
+    Returns zero at hydraulic equilibrium. Works with both NumPy arrays and
+    CasADi SX symbols (the ** operator is supported by both).
+    """
+    return (
+        G * (F_line / (Cv * fofx)) ** 2
+        + Flowa * F_line**1.9
+        + Flowb * Ftotal**1.9
+        - dPpump
+    )
+
+
 def steady_state_exit_temperature(
     Tin, Iradmeas, MirrorWidth, epsilon, L, F_line, dens, Cp
 ):

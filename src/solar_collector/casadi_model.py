@@ -3,10 +3,12 @@ import casadi as cas
 from .model import (
     flow_rate_from_valve,
     hinside,
+    line_pressure_balance_residual,
     pump_head_and_dP,
     pump_speed_update,
     rho,
     thermal_line_step,
+    valve_characteristic,
     valve_state_update,
 )
 
@@ -78,9 +80,11 @@ class CasadiSolarCollectorModel:
     F(t, xk, uk) -> xkp1   discrete-time state transition
     H(t, xk, uk) -> yk      output map
 
-    The hydraulic balance (pump curve vs. valve equations) is solved at each
-    step by a CasADi Newton rootfinder embedded in the state-update graph,
-    replacing the 10-step successive-substitution loop in the original VBA.
+    The hydraulic balance is solved at each step by a CasADi Newton rootfinder
+    embedded in the state-update graph, replacing the VBA's successive-substitution
+    loop.  The rootfinder solves the full 4-variable system [Ftotal, F_1, F_2, F_3]
+    using the correct per-line pressure balance (VBA line 540):
+      dP_valve + dP_line(F_i^1.9) + dP_system(Ftotal^1.9) = dP_pump.
     """
 
     def __init__(self, config, name: str = None):
@@ -140,34 +144,36 @@ class CasadiSolarCollectorModel:
     def _build_flow_balance_solver(self):
         """Return a CasADi rootfinder that solves the pump/valve hydraulic balance.
 
-        Variable z = Ftotal (scalar).  Parameters p = [spumps, valvex_0..2].
-        Residual: sum_i(F_i(valvex_i, dPpump(z, spumps))) - z = 0.
+        Variables z = [Ftotal, F_1, F_2, F_3].  Parameters p = [spumps, valvex_0..2].
+
+        Residuals (4 equations):
+          r[0]   = F_1 + F_2 + F_3 - Ftotal           (flow conservation)
+          r[1+i] = dP_valve_i + dP_line_i + dP_system - dP_pump  (per-line pressure balance)
+
+        This matches the VBA plant simulation (Module1.vba line 540), where:
+          dP_valve_i  = G * (F_i / (Cv * fofx_i))^2
+          dP_line_i   = Flowa * F_i^1.9
+          dP_system   = Flowb * Ftotal^1.9
         """
-        z = cas.SX.sym("Ftotal")
-        p = cas.SX.sym("p", 1 + self.n_lines)
+        z = cas.SX.sym("z", 1 + self.n_lines)   # [Ftotal, F_1, F_2, F_3]
+        p = cas.SX.sym("p", 1 + self.n_lines)   # [spumps, valvex_1, valvex_2, valvex_3]
+        Ftotal = z[0]
+        F_lines = z[1:]
         spumps_p = p[0]
         valvex_p = p[1:]
+
         _, dPpump = pump_head_and_dP(
-            z, spumps_p, self.config.dens, min=_casadi_min, max=_casadi_max
+            Ftotal, spumps_p, self.config.dens, min=_casadi_min, max=_casadi_max
         )
-        F_computed = cas.sum1(
-            cas.vertcat(
-                *[
-                    flow_rate_from_valve(
-                        valvex_p[i],
-                        self.config.Cv,
-                        dPpump,
-                        self.config.G,
-                        0.0,
-                        self.config.Flowb,
-                        sqrt=cas.sqrt,
-                        where=_casadi_where,
-                    )
-                    for i in range(self.n_lines)
-                ]
-            )
-        )
-        rfp = cas.Function("rfp", [z, p], [F_computed - z])
+        residuals = [cas.sum1(F_lines) - Ftotal]
+        for i in range(self.n_lines):
+            fofx_i = valve_characteristic(valvex_p[i])
+            residuals.append(line_pressure_balance_residual(
+                F_lines[i], Ftotal, fofx_i,
+                self.config.Cv, self.config.G, self.config.Flowa, self.config.Flowb,
+                dPpump,
+            ))
+        rfp = cas.Function("rfp", [z, p], [cas.vertcat(*residuals)])
         return cas.rootfinder("flow_balance", "newton", rfp)
 
     def _unpack_state(self, x):
@@ -214,29 +220,17 @@ class CasadiSolarCollectorModel:
             clip=_casadi_clip,
         )
 
-        Ftotal_init = cas.sum1(Mdot_lines) / self.config.dens
+        # Initial guess for [Ftotal, F_1, F_2, F_3]; floor prevents zero-flow
+        # singularity in the Jacobian of F^1.9 at the first step.
+        F_i_init = [
+            _casadi_max(Mdot_lines[i] / self.config.dens, 1e-6)
+            for i in range(self.n_lines)
+        ]
+        Ftotal_init = _casadi_max(cas.sum1(Mdot_lines) / self.config.dens, 1e-6)
+        z_init = cas.vertcat(Ftotal_init, *F_i_init)
         p_bal = cas.vertcat(spumps_new, valvex_new)
-        Ftotal_sol = self.flow_balance(Ftotal_init, p_bal)[0]
-
-        _, dPpump = pump_head_and_dP(
-            Ftotal_sol, spumps_new, self.config.dens, min=_casadi_min, max=_casadi_max
-        )
-
-        F_lines_new = cas.vertcat(
-            *[
-                flow_rate_from_valve(
-                    valvex_new[i],
-                    self.config.Cv,
-                    dPpump,
-                    self.config.G,
-                    0.0,
-                    self.config.Flowb,
-                    sqrt=cas.sqrt,
-                    where=_casadi_where,
-                )
-                for i in range(self.n_lines)
-            ]
-        )
+        z_sol = self.flow_balance(z_init, p_bal)
+        F_lines_new = z_sol[1:]
         Mdot_lines_new = self.config.dens * F_lines_new
 
         Tb_rows, PipeT_rows = [], []

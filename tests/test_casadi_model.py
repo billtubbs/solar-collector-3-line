@@ -4,9 +4,10 @@ import pytest
 
 from solar_collector.casadi_model import CasadiSolarCollectorModel
 from solar_collector.model import (
-    flow_rate_from_valve,
+    line_pressure_balance_residual,
     pump_head_and_dP,
     pump_speed_update,
+    valve_characteristic,
     valve_state_update,
 )
 from solar_collector.simulation import SimulationConfig, SimulationState
@@ -103,7 +104,7 @@ def test_casadi_model_step_pump_valve_dynamics():
 
 
 def test_casadi_model_hydraulic_balance():
-    """Flow rates from model.F must satisfy the pump/valve balance equation."""
+    """Flow rates from model.F must satisfy the full per-line pressure balance."""
     config = SimulationConfig()
     model = CasadiSolarCollectorModel(config)
     state = make_initial_state(config)
@@ -111,32 +112,24 @@ def test_casadi_model_hydraulic_balance():
     x0 = pack_state(model, state)
 
     x1 = model.F(0.0, x0, u)
-    spumps_new, valvex_new, Mdot_lines_new, Tb_new, PipeT_new = (
-        model._unpack_state(x1)
-    )
+    spumps_new, valvex_new, Mdot_lines_new, _, _ = model._unpack_state(x1)
 
     F_arr = np.array(Mdot_lines_new).flatten() / config.dens
     valvex_arr = np.array(valvex_new).flatten()
-    spumps_val = float(spumps_new)
     Ftotal_sol = float(F_arr.sum())
+    _, dPpump = pump_head_and_dP(Ftotal_sol, float(spumps_new), config.dens)
 
-    # Re-evaluate pump dP at the solved Ftotal and check valve flows sum back
-    _, dPpump_check = pump_head_and_dP(Ftotal_sol, spumps_val, config.dens)
-    F_recomputed = np.array(
-        [
-            flow_rate_from_valve(
-                valvex_arr[i],
-                config.Cv,
-                dPpump_check,
-                config.G,
-                0.0,
-                config.Flowb,
-            )
-            for i in range(model.n_lines)
-        ]
-    )
-    assert np.allclose(F_recomputed, F_arr, rtol=1e-6)
-    assert pytest.approx(F_recomputed.sum(), rel=1e-6) == Ftotal_sol
+    # Flow conservation
+    assert pytest.approx(F_arr.sum(), rel=1e-6) == Ftotal_sol
+
+    # Per-line pressure balance: dP_valve + dP_line + dP_system = dP_pump
+    for i in range(model.n_lines):
+        fofx_i = valve_characteristic(valvex_arr[i])
+        residual = line_pressure_balance_residual(
+            F_arr[i], Ftotal_sol, fofx_i,
+            config.Cv, config.G, config.Flowa, config.Flowb, dPpump,
+        )
+        assert pytest.approx(residual, abs=1e-6) == 0.0
 
 
 def test_casadi_model_output_function_returns_expected_shape():

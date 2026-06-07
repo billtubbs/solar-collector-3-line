@@ -57,6 +57,24 @@
     `(t_eval, U, x0) → (X, Y)`, matching `make_n_step_simulation_function_from_model` from
     the `casadi-models` package.
   - Kept `SimulationConfig` and `SimulationState` for backward compatibility with existing tests.
+- **Added `run_simulation_ol.py`** — open-loop simulation script using
+  `make_open_loop_simulation`:
+  - Single plant model (`CasadiSolarCollectorModel`) with fixed irradiance.
+  - Pump speed step change (`SPUMP_NOMINAL → SPUMP_STEPPED`) at step
+    `T_STEP_K`; step must fall on a chunk boundary so only one CasADi
+    simulation function is needed.
+  - Flow rates initialised via `plant.flow_balance` (the hydraulic Newton
+    rootfinder) rather than a density-based heuristic, eliminating a
+    spurious transient at t = 0.
+  - Saves results to `results/simulation_ol.npz` and `results/simulation_ol.csv`
+    (inputs, states, outputs at every `N_CHUNK` steps).
+  - Produces four-panel time-series plots (temperatures, flow rates, valve
+    positions, pump speed) via `plot_utils.make_tsplots`.
+- **Added `plot_utils.py`** — lightweight Matplotlib helpers:
+  - `make_tsplots(t, plot_data, ...)`: stacked subplots from a dict of
+    named panels; supports `"plot"` and `"step"` trace kinds.
+  - `make_ioplots(t, inputs, states, outputs, ...)`: convenience wrapper
+    that organises outputs, states, and inputs into labelled panels.
 
 ### Design notes
 - `model.py` injects all math operations (`exp`, `log`, `sqrt`, `min`, `max`, `pi`) as keyword
@@ -77,35 +95,9 @@
   interval); tuning of `PumpPIGain` / `PumpPITau` may need adjustment to match VBA behaviour.
 
 ### Discrepancies / improvements still to address
-- `flowaest` is hardcoded to `0.0` in `CasadiSolarCollectorModel`; the numerical impact is
-  negligible at balanced conditions but the asymmetry should be resolved when the state vector
-  is finalised.
-- The simplified hydraulic equation in Python (`flowaest + 9·Flowb` denominator) differs from
-  the full VBA nonlinear form (`dPSys/F² + flowa1/F^0.1`); a direct hydraulic snapshot
-  validation against stored spreadsheet data would quantify the discrepancy.
 - Hydraulic balance validation against 282 stored spreadsheet snapshots not yet implemented.
 - Controller cascade composition into a single `StateSpaceModelDT`-compatible model not yet
   implemented; needed before `simulate` can be used with the full cascade.
-- Gymnasium environment wrapper not yet started.
-
-- **Added `run_simulation_ol.py`** — open-loop simulation script using
-  `make_open_loop_simulation`:
-  - Single plant model (`CasadiSolarCollectorModel`) with fixed irradiance.
-  - Pump speed step change (`SPUMP_NOMINAL → SPUMP_STEPPED`) at step
-    `T_STEP_K`; step must fall on a chunk boundary so only one CasADi
-    simulation function is needed.
-  - Flow rates initialised via `plant.flow_balance` (the hydraulic Newton
-    rootfinder) rather than a density-based heuristic, eliminating a
-    spurious transient at t = 0.
-  - Saves results to `results/simulation_ol.npz` and `results/simulation_ol.csv`
-    (inputs, states, outputs at every `N_CHUNK` steps).
-  - Produces four-panel time-series plots (temperatures, flow rates, valve
-    positions, pump speed) via `plot_utils.make_tsplots`.
-- **Added `plot_utils.py`** — lightweight Matplotlib helpers:
-  - `make_tsplots(t, plot_data, ...)`: stacked subplots from a dict of
-    named panels; supports `"plot"` and `"step"` trace kinds.
-  - `make_ioplots(t, inputs, states, outputs, ...)`: convenience wrapper
-    that organises outputs, states, and inputs into labelled panels.
 
 ### Next actions
 - Validate the hydraulic balance against stored spreadsheet snapshots.
@@ -199,6 +191,32 @@
 
 - **Fixed NaN in hydraulic solver at low pump speed** (`model.py`, `casadi_model.py`):
   - `pump_head_and_dP`: added `max=DEFAULT_MAX` parameter; denominator `Fmax` is now clamped to `max(Fmax, 1e-10)` before dividing, eliminating the `0/0 → NaN` when `spumps ≈ 0`. Both CasADi call sites updated to pass `max=_casadi_max`.
+
+- **Further live simulation refinements** (`live_sim.py`, `run_simulation_live.py`):
+  - Increased padding between the lower plot row and the slider area (`bottom` offset raised).
+  - Irad slider: added a nominal reference marker at 0.95 kW/m² (noon peak from VBA DNI model) so the red line sits at the operating point even when the slider starts at zero; actual init value and slider handle remain at `IRAD_INIT`.
+  - Initial valve positions changed to fully open (`VALVE_INIT = _VALVE_MAX = 1.0`).
+  - Tin and Tamb slider lower bounds lowered to 10 °C to match the ambient cold-start initial condition.
+  - Frame interval corrected to 246 ms (`≈ dt × 1000`) so the simulation runs at real time (~4 fps) instead of the previous 5× real-time rate.
+  - `_update_temp_ylim` helper added: `set_ylim` is now only called when the lower bound changes by more than 2 °C, eliminating the full layout recalculation on every frame that was degrading slider responsiveness.
+  - Pump speed y-axis lower bound set to `_PUMP_MIN − 0.05 = 0.25` so the 0.3 minimum is visually prominent.
+  - Irradiance y-axis lower bound set to −0.05 so the zero line is clearly visible.
+  - **Fast-forward button** (`+15 s`) added to the slider area, to the left of the STOP/START button. Clicking sets `_ff_steps = round(15.0 / dt)` (~61 steps); the flag is drained on the next animation frame with per-step `_record()` calls so the history buffers capture the full trajectory.
+  - Removed type annotations from `make_initial_state` in `model.py` for consistency with the rest of the file.
+
+- **Temperature plot reference lines and named constants** (`live_sim.py`):
+  - Added module-level constants `_T_PLOT_MAX = 475`, `_T_MAX = 400`, `_T_SP = 395`.
+  - Both temperature subplots now show a red dashed `T_SP` line at 395 °C and a dark-grey dashed `T max` line at 400 °C.
+  - Y-axis maximum raised from 450 °C to 475 °C to provide space above the safety limit line for the legend.
+  - All magic numbers in ylim and axhline calls replaced with the named constants.
+
+- **Corrected hydraulic balance to match VBA plant simulation** (`model.py`, `casadi_model.py`, `tests/test_casadi_model.py`):
+  - Root cause: `flow_rate_from_valve` implemented the *controller's simplified model* (VBA line 390, using `flowaest + 9·Flowb` constant) instead of the *plant simulation* equation (VBA line 540, `dPSys/F² + flowa1/F^0.1`). There was no documented reason for this deviation.
+  - Added `line_pressure_balance_residual(F_line, Ftotal, fofx, Cv, G, Flowa, Flowb, dPpump)` to `model.py`: encapsulates the correct per-line pressure balance `dP_valve + dP_line + dP_system = dP_pump` where `dP_line = Flowa·F^1.9` and `dP_system = Flowb·Ftotal^1.9`. Works with both NumPy and CasADi SX via the `**` operator.
+  - Replaced the 1-variable rootfinder (`z = Ftotal`) with a 4-variable Newton solver (`z = [Ftotal, F_1, F_2, F_3]`) using one flow-conservation equation and three per-line pressure-balance equations. `Flowa` (already in `SimulationConfig`) is now used correctly.
+  - A `1e-6` floor on the initial guess prevents a singular Jacobian in `F^1.9` at cold-start zero flow.
+  - Simplified `_state_update`: the redundant `pump_head_and_dP` + `flow_rate_from_valve` calls after the rootfinder are removed; `F_lines_new` comes directly from solver output `z_sol[1:]`.
+  - Updated `test_casadi_model_hydraulic_balance` to verify each line's pressure-balance residual is zero rather than re-checking the old simplified equation. All 14 tests pass.
 
 ### Discrepancies to investigate
 - **Pump speed minimum discrepancy**: VBA (`Module1.vba` line 218) clips `spumpstarg ≥ 0.3`; valve minimum in VBA is 0.1 (lines 363–364, 388, 515). The Python `_PUMP_MIN = 0.3` has been set to match the VBA. The original reason for the 0.3 floor (vs a lower value like 0.1) is not documented in the VBA — **to be clarified with the workbook author**.
