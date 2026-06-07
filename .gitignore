@@ -1,0 +1,10 @@
+results
+plots
+
+*.xlsm
+
+__pycache__/
+*.egg-info/
+.ipynb_checkpoints\
+
+.venv
