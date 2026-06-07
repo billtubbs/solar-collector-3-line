@@ -158,11 +158,11 @@ def steady_state_exit_temperature(
 
 def make_initial_state(
     plant,
-    T_init: float,
-    spump: float = 0.0,
-    valvex: float = 0.1,
-    Mdot: float = 0.0,
-) -> np.ndarray:
+    T_init,
+    spump=0.0,
+    valvex=0.1,
+    Mdot=0.0,
+):
     """Construct a uniform initial state vector for the plant.
 
     All fluid and pipe-wall temperature segments are set to ``T_init``.

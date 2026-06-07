@@ -16,7 +16,7 @@ from solar_collector.casadi_model import CasadiSolarCollectorModel
 from solar_collector.live_sim import (
     SolarCollectorLiveSim,
     _PUMP_MIN,
-    _VALVE_MIN,
+    _VALVE_MAX,
 )
 from solar_collector.model import make_initial_state
 from solar_collector.simulation import SimulationConfig
@@ -25,11 +25,12 @@ from solar_collector.simulation import SimulationConfig
 
 # Initial conditions: ambient cold-start (actuators at minimum, no irradiance)
 SPUMP_INIT = _PUMP_MIN  # minimum pump speed
-VALVE_INIT = _VALVE_MIN  # minimum valve position
+VALVE_INIT = _VALVE_MAX  # fully open
 IRAD_INIT = 0.0  # no irradiance (pre-sunrise)
 STEPS_PER_FRAME = 1  # simulation steps per animation frame
 HISTORY_LEN = 600  # time points kept in scrolling plots (~148 s at dt=0.246)
-FRAME_INTERVAL_MS = 50  # target ms between frames (≈ 20 fps ceiling)
+# frame interval ≈ STEPS_PER_FRAME × dt × 1000 ms → real-time (≈ 4 fps)
+FRAME_INTERVAL_MS = 246
 PLOT_HORIZON = 60.0  # seconds of history shown in time-series plots
 
 # ── Plant configuration ────────────────────────────────────────────────────
